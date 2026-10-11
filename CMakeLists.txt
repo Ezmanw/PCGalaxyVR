@@ -202,6 +202,7 @@ else()
   add_executable(pcgalaxyvr $<TARGET_OBJECTS:decomp> ${PLATFORM_SRCS}
     platform/common/headless.c
     platform/linux/main.cpp
+    platform/linux/flat_app.cpp
     platform/linux/window.S)
   target_include_directories(pcgalaxyvr PRIVATE ${DECOMP_INCLUDES})
   target_compile_definitions(pcgalaxyvr PRIVATE ${PORT_DEFS} PORT_PLATFORM_CODE=1 PCGVR_VERSION="${PROJECT_VERSION}")

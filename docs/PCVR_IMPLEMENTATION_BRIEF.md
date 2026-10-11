@@ -13,8 +13,12 @@ Meta's hardware: the diorama, the giant screen and its stereoscopic 3D, the
 HUD and settings panels, cutscene skipping, the controller pointer, the
 setup screen, saves.
 
-Out of scope for the first release: Windows, macOS, a flat (non-VR) mode,
-Vulkan.
+Out of scope for the first release: Windows, macOS, Vulkan.
+
+Added along the way: a **flat mode** (`--flat`), the game in a desktop
+window from its own camera with a gamepad or keyboard and mouse, so the
+game files and the port can be checked without a headset (and played
+without one).
 
 ## Where we start
 
@@ -176,11 +180,15 @@ Each phase ends with something that can be checked.
    *Check:* runs on Monado's simulated headset and on real hardware.
 6. **Audio, paths, setup screen.** SDL2 audio output; XDG folders; setup
    screen search on the PC file system.
-7. **Install tooling.** `tools/install_pc.py` converts a disc image or
+7. **Flat mode.** `pcgalaxyvr --flat`: the giant screen's picture in an SDL
+   window, vsynced, the game's retrace following displays at multiples of
+   60 Hz; gamepad, keyboard and mouse as the Wii Remote and Nunchuk
+   (`platform/linux/flat_app.cpp`).
+8. **Install tooling.** `tools/install_pc.py` converts a disc image or
    extracted disc (via `cook.py`) straight into the data folder; no adb.
-8. **Packaging.** Release tarball with the binary and the converter; an
+9. **Packaging.** Release tarball with the binary and the converter; an
    AppImage later.
-9. **Windows (future).** WGL binding (`XrGraphicsBindingOpenGLWin32KHR`),
+10. **Windows (future).** WGL binding (`XrGraphicsBindingOpenGLWin32KHR`),
    `VirtualAlloc` for the window, `/BASE:0x98000000 /FIXED` for the image,
    clang-cl or MinGW with libc++, WASAPI through SDL2. Nothing in phases 1-8
    should make this harder: platform code goes behind small interfaces

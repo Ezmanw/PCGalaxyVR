@@ -57,13 +57,15 @@ void usage(FILE* out) {
     fprintf(out,
             "PCGalaxyVR %s: Super Mario Galaxy in PC VR (OpenXR)\n"
             "\n"
-            "usage: pcgalaxyvr [--game DIR] [--no-mirror]\n"
+            "usage: pcgalaxyvr [--game DIR] [--no-mirror] [--flat]\n"
             "       pcgalaxyvr --headless DATA SAVES [SECONDS]\n"
             "\n"
             "  --game DIR     play from the converted game files in DIR (the folder\n"
             "                 holding sys and files); by default the folder chosen\n"
             "                 on the setup screen, else ~/.local/share/PCGalaxyVR/game\n"
             "  --no-mirror    no desktop window showing the headset's view\n"
+            "  --flat         play in a window on the desktop, without a headset\n"
+            "                 (gamepad, or keyboard and mouse; F11: full screen)\n"
             "  --headless     run without a headset, saving captures to SAVES/../shots\n"
             "                 (see docs/TECHNICAL.md)\n"
             "  --gl-selftest [N]  build the renderer's shaders and N generated ones\n"
@@ -79,6 +81,7 @@ int main(int argc, char** argv) {
 
     PortPcOptions options{};
     options.mirror = 1;
+    bool flat = false;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "--headless")) {
@@ -92,6 +95,8 @@ int main(int argc, char** argv) {
             _exit(failed == 0 ? 0 : 1);
         } else if (!strcmp(a, "--game") && i + 1 < argc) {
             options.gameDir = argv[++i];
+        } else if (!strcmp(a, "--flat")) {
+            flat = true;
         } else if (!strcmp(a, "--no-mirror")) {
             options.mirror = 0;
         } else if (!strcmp(a, "--version")) {
@@ -108,5 +113,5 @@ int main(int argc, char** argv) {
     }
     // The renderer's shader compile thread has a GLX context of its own.
     XInitThreads();
-    return port_pc_main(&options);
+    return flat ? port_flat_main(&options) : port_pc_main(&options);
 }

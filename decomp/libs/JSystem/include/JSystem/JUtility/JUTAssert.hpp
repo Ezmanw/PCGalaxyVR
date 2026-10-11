@@ -14,7 +14,12 @@ namespace JUTAssertion {
 
     u32 getSDevice();
     void showAssert_f(u32 device, const char* file, int line, const char* msg, ...);
+#ifdef TARGET_PC
+    // __va_list is only a type on AArch64 (its ABI's va_list).
+    void showAssert_f_va(u32 device, const char* file, int line, const char* msg, va_list args);
+#else
     void showAssert_f_va(u32 device, const char* file, int line, const char* msg, __va_list args);
+#endif
     void setWarningMessage_f(u32 device, char* file, int line, const char* fmt, ...);
     void setWarningMessage_f_va(u32 device, const char* file, int line, const char* msg, va_list args);
     void setLogMessage_f(u32 device, char* file, int line, const char* fmt, ...);

@@ -159,6 +159,34 @@ If the game finds no converted files, it shows a **setup screen** in the
 headset listing the folders in your home folder that hold them: aim at one
 and press A to play from it (the game remembers it).
 
+### Without a headset: flat mode
+
+```
+build/pcgalaxyvr --flat
+```
+
+plays the game in a window on the desktop, from the game's own camera as on
+a TV, with a gamepad or the keyboard and mouse (F11 or Alt+Enter: full
+screen). It is the quickest way to check that your converted files work, and
+a way to play without a headset. The VR settings panel is the headset's, so
+in flat mode settings come from `~/.config/PCGalaxyVR/petari_vr.ini` (the
+language, the cutscene skip, the camera's turns).
+
+| Wii | Gamepad (Xbox names) | Keyboard and mouse |
+|---|---|---|
+| Nunchuk stick | Left stick | W A S D |
+| A | A | Space, left mouse button |
+| Shake (spin) | X or B | E |
+| B | Right trigger | Right mouse button |
+| Pointer | Right stick moves it | The mouse |
+| Z | Left trigger | Shift |
+| C | Left shoulder | Q |
+| + (pause) | Start | Esc or Enter |
+| − | Back | Tab |
+| 1 / 2 | Right shoulder / – | 1 / 2 |
+| D-pad | D-pad (right stick click: up) | Arrow keys |
+| Tilt (Star Ball, Ray surfing) | Left stick | W A S D |
+
 ### Where things are
 
 | What | Where |
