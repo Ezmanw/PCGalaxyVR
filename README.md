@@ -237,7 +237,7 @@ controller settings. All the details, and the settings file, are in
 You need clang and lld 17 or newer with LLVM's libc++, CMake 3.24 or newer,
 Ninja, git, and the SDL2, OpenGL/EGL and X11 development files:
 
-- **Ubuntu / Debian:** `sudo apt install clang lld libc++-dev libc++abi-dev cmake ninja-build git libsdl2-dev libgl-dev libegl-dev libx11-dev`
+- **Ubuntu / Debian:** `sudo apt install clang lld libc++-dev libc++abi-dev cmake ninja-build git libsdl2-dev libgl-dev libopengl-dev libegl-dev libx11-dev`
 - **Fedora:** `sudo dnf install clang lld libcxx-devel libcxxabi-devel cmake ninja-build git SDL2-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel`
 - **Arch:** `sudo pacman -S clang lld libc++ cmake ninja git sdl2 libglvnd libx11`
 

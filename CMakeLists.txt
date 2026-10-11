@@ -117,6 +117,8 @@ if(PORT_PLATFORM STREQUAL "linux")
   # Position-independent code in a program linked at a fixed address above
   # 2 GB: nothing may need a 32-bit absolute relocation.
   list(APPEND PORT_COMMON_FLAGS -fPIE)
+  # glibc's <math.h> and the PowerPC intrinsics share two names (see the header).
+  list(APPEND PORT_C_FLAGS "SHELL:-include ${CMAKE_SOURCE_DIR}/platform/include/port/glibc_c.h")
 endif()
 
 add_library(decomp OBJECT ${GAME_SRCS} ${JSYSTEM_SRCS} ${NW4R_SRCS} ${SDK_SRCS})

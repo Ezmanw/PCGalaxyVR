@@ -70,10 +70,17 @@ bool makeContext() {
         port_log("headless: eglInitialize failed (0x%x)", eglGetError());
         return false;
     }
-    const EGLint cfgAttr[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
+    // Pbuffer configs (the default asks for window ones, which the
+    // surfaceless platform has none of), else any.
     EGLConfig cfg;
     EGLint n = 0;
-    if (!eglChooseConfig(sDisplay, cfgAttr, &cfg, 1, &n) || n == 0) {
+    for (EGLint surface : {EGL_PBUFFER_BIT, EGL_DONT_CARE}) {
+        const EGLint cfgAttr[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_SURFACE_TYPE, surface, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
+                                  EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
+        if (eglChooseConfig(sDisplay, cfgAttr, &cfg, 1, &n) && n > 0) break;
+        n = 0;
+    }
+    if (n == 0) {
         port_log("headless: no EGL config for desktop OpenGL");
         return false;
     }
