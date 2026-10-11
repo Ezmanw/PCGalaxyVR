@@ -214,6 +214,25 @@ Each phase ends with something that can be checked.
 
 ## Verification
 
+Done so far, in the development container (no headset, no game files):
+
+- the program builds with clang 18 and libc++ and links at 0x98000000;
+- `--gl-selftest` builds the VR layer's and the renderer's programs and
+  256 generated GX programs on Mesa's desktop OpenGL 4.5 (llvmpipe);
+- the headless runner maps MEM1, MEM2 and the uncached mirrors at the
+  Wii's addresses and stops at the disc check without game files;
+- against Monado 21 (simulated headset, null compositor, Xvfb for GLX):
+  instance, session and swapchains come up, the runtime accepts the
+  bindings of all five controller profiles, the session reaches
+  FOCUSED, the frame loop runs and draws, the setup screen appears, and
+  closing the window ends the session cleanly;
+- flat mode opens and, without game files, says how to convert them.
+
+Still to check, by a player: everything with game files, in a real
+headset (SteamVR, Monado, WiVRn), and the 120 Hz pacing.
+
+Planned checks:
+
 - CI: build on Ubuntu with clang and libc++; run `pcgalaxyvr --version` and
   the headless runner's no-data path.
 - Locally with game files: `pcgalaxyvr --headless` captures (as
