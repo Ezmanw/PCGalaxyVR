@@ -9,11 +9,10 @@
 // game's retrace follows the display (each game frame shown the same number
 // of refreshes), otherwise the game keeps its own 59.94 Hz clock.
 //
-// Input: a gamepad (SDL's game controller mapping, Xbox names), or the
-// keyboard and mouse, as the Wii Remote and Nunchuk (see usage below and the
-// README).  The mouse is the pointer; with a gamepad the right stick moves
-// it.  The left stick also tilts the remote, which the game reads where it
-// steers by tilt (the Star Ball, Ray surfing) and nowhere else.
+// Input: a gamepad, or the keyboard and mouse, as the Wii Remote and Nunchuk
+// (port/pc_gamepad.h).  The mouse is the pointer; with a gamepad the right
+// stick moves it.  The left stick also tilts the remote, which the game reads
+// where it steers by tilt (the Star Ball, Ray surfing) and nowhere else.
 #include <SDL.h>
 #include <math.h>
 #include <stdio.h>
@@ -26,6 +25,7 @@
 #include "port/heap_routing.h"
 #include "port/input.h"
 #include "port/paths.h"
+#include "port/pc_gamepad.h"
 #include "port/pc_app.h"
 #include "port/port.h"
 #include "../src/gl/gl_context.h"
@@ -40,48 +40,20 @@ extern "C" void port_boot(const char* dataRoot, const char* saveRoot);
 
 namespace {
 
-enum : uint32_t {
-    W_LEFT = 0x0001, W_RIGHT = 0x0002, W_DOWN = 0x0004, W_UP = 0x0008, W_PLUS = 0x0010, W_2 = 0x0100, W_1 = 0x0200,
-    W_B = 0x0400, W_A = 0x0800, W_MINUS = 0x1000, W_Z = 0x2000, W_C = 0x4000, W_HOME = 0x8000
-};
-
 struct Flat {
     SDL_Window* window = nullptr;
     SDL_GLContext gl = nullptr;
-    SDL_GameController* pad = nullptr;
     gpu::EfbTarget target;
     int viewX = 0, viewY = 0, viewW = 0, viewH = 0;  // the 16:9 picture in the window (pixels, top-left origin)
     // The pointer, -1..1 across the picture: the mouse's position, or moved
     // by the right stick.
     float pointerX = 0.0f, pointerY = 0.0f;
     bool pointerShown = false;
-    int64_t mouseMovedAt = 0;
-    int spinFrames = 0;
-    int lastRumble = 0;
     int refreshes = 1;  // display refreshes per game frame (0: the game keeps its own clock)
     int refreshCount = 0;
 };
 
 Flat gFlat;
-
-float deadzone(float v) {
-    const float dz = 0.18f;
-    float a = fabsf(v);
-    return a < dz ? 0.0f : copysignf((a - dz) / (1.0f - dz), v);
-}
-
-float axis(SDL_GameController* c, SDL_GameControllerAxis a) { return c ? SDL_GameControllerGetAxis(c, a) / 32767.0f : 0.0f; }
-bool button(SDL_GameController* c, SDL_GameControllerButton b) { return c && SDL_GameControllerGetButton(c, b); }
-
-void openPad(Flat& f) {
-    if (f.pad) return;
-    for (int i = 0; i < SDL_NumJoysticks(); i++) {
-        if (SDL_IsGameController(i) && (f.pad = SDL_GameControllerOpen(i)) != nullptr) {
-            port_log("flat: gamepad %s", SDL_GameControllerName(f.pad));
-            return;
-        }
-    }
-}
 
 // The window's 16:9 part, and a target that size for the picture.
 void layout(Flat& f) {
@@ -110,66 +82,13 @@ void updateInput(Flat& f, float dt) {
     PortPadState pad{};
     pad.connected = 1;
     pad.pointerDist = 2.0f;
-    SDL_GameController* c = f.pad;
-    const Uint8* key = SDL_GetKeyboardState(nullptr);
+    pcpad::merge(&pad, true);
+    pcpad::tilt(&pad);
 
-    // Nunchuk stick: the left stick, or WASD.
-    float sx = deadzone(axis(c, SDL_CONTROLLER_AXIS_LEFTX)), sy = -deadzone(axis(c, SDL_CONTROLLER_AXIS_LEFTY));
-    if (key[SDL_SCANCODE_A]) sx -= 1.0f;
-    if (key[SDL_SCANCODE_D]) sx += 1.0f;
-    if (key[SDL_SCANCODE_W]) sy += 1.0f;
-    if (key[SDL_SCANCODE_S]) sy -= 1.0f;
-    float len = sqrtf(sx * sx + sy * sy);
-    if (len > 1.0f) {
-        sx /= len;
-        sy /= len;
-    }
-    pad.stickX = sx;
-    pad.stickY = sy;
-
-    // Buttons.  Gamepad: A jump (A), X or B spin, right trigger B (shoot,
-    // cancel), left trigger Z, left shoulder C, Start + (pause), Back -,
-    // D-pad, right stick click D-pad up (first-person look), right shoulder
-    // 1.  Keyboard and mouse: Space or the left button A, the right button
-    // B, Shift Z, E spin, Q C, Esc or Enter +, Tab -, arrows D-pad, 1 and 2.
-    Uint32 mouse = SDL_GetMouseState(nullptr, nullptr);
-    bool shift = key[SDL_SCANCODE_LSHIFT] || key[SDL_SCANCODE_RSHIFT];
-    if (button(c, SDL_CONTROLLER_BUTTON_A) || key[SDL_SCANCODE_SPACE] || (mouse & SDL_BUTTON_LMASK)) pad.buttons |= W_A;
-    if (axis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 0.5f || (mouse & SDL_BUTTON_RMASK)) pad.buttons |= W_B;
-    if (axis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 0.5f || shift) pad.buttons |= W_Z;
-    if (button(c, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) || key[SDL_SCANCODE_Q]) pad.buttons |= W_C;
-    if (button(c, SDL_CONTROLLER_BUTTON_START) || key[SDL_SCANCODE_ESCAPE] || key[SDL_SCANCODE_RETURN]) pad.buttons |= W_PLUS;
-    if (button(c, SDL_CONTROLLER_BUTTON_BACK) || key[SDL_SCANCODE_TAB]) pad.buttons |= W_MINUS;
-    if (button(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) || key[SDL_SCANCODE_1]) pad.buttons |= W_1;
-    if (key[SDL_SCANCODE_2]) pad.buttons |= W_2;
-    if (button(c, SDL_CONTROLLER_BUTTON_DPAD_LEFT) || key[SDL_SCANCODE_LEFT]) pad.buttons |= W_LEFT;
-    if (button(c, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || key[SDL_SCANCODE_RIGHT]) pad.buttons |= W_RIGHT;
-    if (button(c, SDL_CONTROLLER_BUTTON_DPAD_UP) || button(c, SDL_CONTROLLER_BUTTON_RIGHTSTICK) || key[SDL_SCANCODE_UP]) pad.buttons |= W_UP;
-    if (button(c, SDL_CONTROLLER_BUTTON_DPAD_DOWN) || key[SDL_SCANCODE_DOWN]) pad.buttons |= W_DOWN;
-
-    // Spin: the acceleration spike of a shaken remote (as the headset's
-    // flick of the controller), for a few frames from the press.
-    static bool spinHeld = false;
-    bool spin = button(c, SDL_CONTROLLER_BUTTON_X) || button(c, SDL_CONTROLLER_BUTTON_B) || key[SDL_SCANCODE_E];
-    if (spin && !spinHeld) f.spinFrames = 6;
-    spinHeld = spin;
-    if (f.spinFrames > 0) {
-        float s = (f.spinFrames & 1) ? 2.5f : -2.5f;
-        pad.accX = s;
-        pad.accY = s;
-        f.spinFrames--;
-    }
-
-    // Tilt: the left stick tips the remote up to 45 degrees forward, back
-    // and to the sides (x right, y up, z where it points; see port/input.h).
-    float roll = pad.stickX * 0.785f, pitch = pad.stickY * 0.785f;
-    pad.tilted = 1;
-    pad.downX = sinf(roll);
-    pad.downZ = sinf(pitch);
-    pad.downY = -sqrtf(fmaxf(0.0f, 1.0f - pad.downX * pad.downX - pad.downZ * pad.downZ));
-
-    // Pointer: the mouse over the picture, or the right stick moving it.
-    float rx = deadzone(axis(c, SDL_CONTROLLER_AXIS_RIGHTX)), ry = deadzone(axis(c, SDL_CONTROLLER_AXIS_RIGHTY));
+    // Pointer: the mouse over the picture (mouseMoved), or the right stick
+    // moving it.
+    float rx = 0.0f, ry = 0.0f;
+    pcpad::rightStick(&rx, &ry);
     if (rx != 0.0f || ry != 0.0f) {
         f.pointerX = fminf(1.0f, fmaxf(-1.0f, f.pointerX + rx * 1.6f * dt));
         f.pointerY = fminf(1.0f, fmaxf(-1.0f, f.pointerY + ry * 1.6f * 16.0f / 9.0f * dt));
@@ -179,13 +98,7 @@ void updateInput(Flat& f, float dt) {
     pad.pointerX = f.pointerX;
     pad.pointerY = f.pointerY;
     port_input_set(0, &pad);
-
-    // Rumble.
-    int rumble = port_input_rumble(0);
-    if (f.pad && rumble != f.lastRumble) {
-        SDL_GameControllerRumble(f.pad, rumble ? 0x6000 : 0, rumble ? 0x6000 : 0, rumble ? 10000 : 0);
-        f.lastRumble = rumble;
-    }
+    pcpad::rumble(port_input_rumble(0));
 }
 
 void mouseMoved(Flat& f, int x, int y) {
@@ -303,7 +216,7 @@ extern "C" int port_flat_main(const PortPcOptions* options) {
     gpu::setShaderCachePath((port_cache_dir() + "/shaders.bin").c_str());
     gpu::renderer().init();
     layout(f);
-    openPad(f);
+    pcpad::init();
     f.refreshes = refreshesPerFrame(f.window);
     port_log("flat: %s", f.refreshes ? "the game's frames follow the display" : "the display is not at a multiple of 60 Hz: the game keeps its own clock");
 
@@ -320,14 +233,8 @@ extern "C" int port_flat_main(const PortPcOptions* options) {
                 quit = true;
                 break;
             case SDL_CONTROLLERDEVICEADDED:
-                openPad(f);
-                break;
             case SDL_CONTROLLERDEVICEREMOVED:
-                if (f.pad && SDL_GameControllerGetJoystick(f.pad) && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(f.pad)) == e.cdevice.which) {
-                    SDL_GameControllerClose(f.pad);
-                    f.pad = nullptr;
-                    openPad(f);
-                }
+                pcpad::handleEvent(e);
                 break;
             case SDL_MOUSEMOTION:
                 mouseMoved(f, e.motion.x, e.motion.y);

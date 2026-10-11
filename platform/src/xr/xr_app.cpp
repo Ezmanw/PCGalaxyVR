@@ -52,6 +52,9 @@
 #include "port/input_script.h"
 #include "port/paths.h"
 #include "port/pc_app.h"
+#ifndef __ANDROID__
+#include "port/pc_gamepad.h"
+#endif
 #include "port/port.h"
 #include "../gl/gl_context.h"
 #include "../gx/gl_renderer.h"
@@ -289,7 +292,7 @@ void presentMirror(App&) {}
 void initGl(App& a) {
     SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
     SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "0");
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) {
         port_fatal("cannot open a window on the X11 display (%s). PCGalaxyVR needs an X11 session, or XWayland under Wayland.", SDL_GetError());
     }
     for (int profile : {SDL_GL_CONTEXT_PROFILE_COMPATIBILITY, SDL_GL_CONTEXT_PROFILE_CORE}) {
@@ -335,6 +338,7 @@ void initGl(App& a) {
     glctx::setApi(glctx::Api::Glx);
     port_log("GL: %s / %s / %s", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
     glctx::applyDefaults();
+    pcpad::init();
 }
 
 // The left eye's image (the part rendered) into the desktop window, cropped
@@ -1219,6 +1223,35 @@ void updateInput(App& a, XrTime time) {
             vr::pointerLost();
         }
     }
+#ifndef __ANDROID__
+    // A gamepad as well, for playing seated (port/pc_gamepad.h): its buttons
+    // and stick join the controllers'.  Without a tracked right controller
+    // its right stick moves the pointer, and without the controller's
+    // orientation its left stick tilts the remote.
+    pcpad::merge(&pad, false);
+    if (!aimOriented) pcpad::tilt(&pad);
+    {
+        static float padPointerX = 0.0f, padPointerY = 0.0f;
+        static bool padPointerShown = false;
+        static int64_t lastNs = 0;
+        int64_t nowNs = port_host_time_ns();
+        float dt = lastNs ? fminf(0.1f, (nowNs - lastNs) / 1e9f) : 0.0f;
+        lastNs = nowNs;
+        float rx = 0.0f, ry = 0.0f;
+        pcpad::rightStick(&rx, &ry);
+        if (!aimTracked && (rx != 0.0f || ry != 0.0f)) {
+            padPointerX = fminf(1.0f, fmaxf(-1.0f, padPointerX + rx * 1.6f * dt));
+            padPointerY = fminf(1.0f, fmaxf(-1.0f, padPointerY + ry * 1.6f * 16.0f / 9.0f * dt));
+            padPointerShown = true;
+        }
+        if (aimTracked) padPointerShown = false;
+        if (padPointerShown) {
+            pad.pointerValid = 1;
+            pad.pointerX = padPointerX;
+            pad.pointerY = padPointerY;
+        }
+    }
+#endif
     if (gScriptCount > 0) {
         portApplyInputScript(gScript, gScriptCount, (int)((port_host_time_ns() - gBootNs) / 1000000), &pad);
     }
@@ -1259,8 +1292,11 @@ void updateInput(App& a, XrTime time) {
     }
     port_input_set(0, &pad);
 
-    // Rumble -> Touch Plus haptics.
+    // Rumble -> Touch Plus haptics (and a gamepad's motors).
     int rumble = port_input_rumble(0);
+#ifndef __ANDROID__
+    pcpad::rumble(rumble);
+#endif
     if (rumble != a.lastRumble) {
         for (int h = 0; h < 2; h++) {
             XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
@@ -2285,6 +2321,7 @@ extern "C" int port_pc_main(const PortPcOptions* options) {
     while (!quit) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
+            pcpad::handleEvent(e);
             if (e.type == SDL_QUIT) {
                 // The window was closed: end the session properly first.
                 if (a.sessionRunning && !exitAsked) {

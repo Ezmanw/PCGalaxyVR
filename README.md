@@ -38,8 +38,11 @@ streaming from the PC (WiVRn, ALVR).
 
 ## Status: early, help wanted
 
-The PC port is new and in progress. Its code compiles on Linux;
-**it has not been played in a headset yet.** Everything below the platform
+The PC port is new. It builds and runs on Linux: its shaders all build on
+desktop OpenGL, and against Monado's simulated headset it starts an OpenXR
+session, accepts every controller binding, runs the frame loop, shows the
+setup screen and exits cleanly. **It has not been played in a real headset,
+or with game files, yet** (the machine it was made on had neither). Everything below the platform
 layer (the game, the diorama, the giant screen, the menus) is the Quest
 version's, which plays from start to finish. If you try it, please report
 what happens in the [issues](../../issues), with the log
@@ -226,6 +229,11 @@ language, the cutscene skip, the camera's turns).
 | C | Left grip | Left grip | Left grip | Left grip | Put the game camera behind Mario |
 | − and + | X or Menu | Left A | Menu | Menu | Pause menu (with the VR settings) |
 | D-pad | Right stick | Right stick | Right trackpad | Right stick | Turn the view round Mario (left/right), first-person look (up) |
+
+**A gamepad works in the headset too**, for playing seated: its buttons are
+those of [flat mode](#without-a-headset-flat-mode) and join the VR
+controllers'. Without a tracked right controller its right stick moves the
+pointer.
 
 To recentre the view, use your runtime's own recentre (SteamVR's dashboard,
 or the headset's button with WiVRn). SteamVR can rebind everything in its

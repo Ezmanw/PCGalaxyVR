@@ -46,6 +46,14 @@ has the reasons and the plan.
   while it is still acquired (`mirrorEye`), cropped to the window's shape,
   with `GL_FRAMEBUFFER_SRGB` off so the sRGB-encoded image is copied as it
   is; swap interval 0, so the desktop never paces the frame loop.
+- **Flat mode and gamepads.** `pcgalaxyvr --flat` (`platform/linux/flat_app.cpp`)
+  replays each frame into a 16:9 target the size of the window's 16:9 part
+  (the giant screen's picture) and copies it into a vsynced SDL window; at a
+  multiple of 60 Hz the display drives the game's retrace. A gamepad, the
+  keyboard and the mouse are the Wii Remote and Nunchuk
+  (`platform/src/input/pc_gamepad.cpp`, `port/pc_gamepad.h`); in the headset
+  app a gamepad's buttons join the controllers', and its right stick moves
+  the pointer while the right controller is not tracked.
 - **Audio.** `audio_out.cpp` keeps its ring buffer and resampler; on PC an
   SDL2 audio device's callback drains it (48 kHz requested, 256-frame
   device buffer), and an unplugged device is reopened.
