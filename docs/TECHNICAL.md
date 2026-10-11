@@ -42,6 +42,17 @@ has the reasons and the plan.
   the simple controller (`suggestBindings` in `xr_app.cpp`). Closing the
   desktop window ends the session with `xrRequestExitSession`; while no
   headset is found, the program waits for one.
+- **Quad layers and SteamVR.** SteamVR shows each `XrCompositionLayerQuad`
+  as an OpenVR overlay (`openxr_quadlayer_N` in `vrcompositor.txt`). An
+  overlay has no eye of its own, so the stereo screen's two layers
+  (`XR_EYE_VISIBILITY_LEFT`/`_RIGHT`) reached both eyes on top of each
+  other, and every new `imageRect` size (the screen's render scale, a
+  stereo pair's smaller pictures) became a new overlay texture, copied.
+  On SteamVR (`XR runtime: SteamVR/OpenXR`) the HUD, the settings panel and
+  the virtual screen are therefore drawn into the eye images
+  (`vr::uiLayers()` false, the path for runtimes without sRGB swapchains);
+  `PETARI_XR_QUADS=0/1` in `petari_debug.env` forces either way. Monado and
+  WiVRn keep the quad layers.
 - **Desktop window.** While the virtual screen is up (the giant screen,
   cutscenes) its picture is blitted into the SDL window, letterboxed
   (`mirrorScreen`); otherwise the left eye's image, cropped to the window's

@@ -149,6 +149,7 @@ struct App {
     bool hasSpaceWarp = false;  // XR_FB_space_warp enabled, with its swapchains
     bool hasLayerSettings = false;  // XR_FB_composition_layer_settings (Super Resolution)
     bool hasRecommendedRes = false; // XR_META_recommended_layer_resolution (Meta's dynamic resolution)
+    bool quadLayers = true;         // the runtime shows quad layers as OpenXR says (not SteamVR, see initUiLayers)
     PFN_xrGetRecommendedLayerResolutionMETA xrGetRecommendedLayerResolutionMETA = nullptr;
     // Meta's performance counters (XR_META_performance_metrics): the app's
     // and the compositor's GPU time and the GPU's utilization, for the
@@ -526,6 +527,12 @@ void initInstance(App& a) {
     if (XR_SUCCEEDED(xrGetInstanceProperties(a.instance, &ip))) {
         port_log("XR runtime: %s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion), XR_VERSION_MINOR(ip.runtimeVersion),
                  XR_VERSION_PATCH(ip.runtimeVersion));
+        a.quadLayers = !strstr(ip.runtimeName, "SteamVR");
+    }
+    // PETARI_XR_QUADS=0/1 (petari_debug.env): the panels and the screen as
+    // quad layers or in the eye images, whatever the runtime.
+    if (const char* q = getenv("PETARI_XR_QUADS")) {
+        a.quadLayers = atoi(q) != 0;
     }
 
     XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
@@ -1016,7 +1023,18 @@ void initSession(App& a) {
 // The panels with text (the HUD panel, the settings panel) as quad layers
 // over the eye layer: one swapchain each at the panel's own size (after
 // vr::init, which sizes them).
+// SteamVR shows each quad layer as an OpenVR overlay (openxr_quadlayer_N in
+// its compositor log).  An overlay has no eye of its own, so a stereo pair's
+// two layers (eyeVisibility LEFT and RIGHT) both reached both eyes, on top of
+// each other; and a new image rectangle (the screen's render scale, a pair's
+// smaller pictures) is a new overlay texture, copied, each time.  There the
+// panels and the screen are drawn into the eye images instead, as on a
+// runtime without sRGB swapchains.
 void initUiLayers(App& a) {
+    if (!a.quadLayers) {
+        port_log("XR UI layers: off (SteamVR shows them without eyes of their own); the panels and screen are drawn into the eye images");
+        return;
+    }
     uint32_t fmtCount = 0;
     XR_CHECK(xrEnumerateSwapchainFormats(a.session, 0, &fmtCount, nullptr));
     std::vector<int64_t> fmts(fmtCount);

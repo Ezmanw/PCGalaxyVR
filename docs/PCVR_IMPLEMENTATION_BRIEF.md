@@ -228,6 +228,12 @@ Done so far, in the development container (no headset, no game files):
   closing the window ends the session cleanly;
 - flat mode opens and, without game files, says how to convert them.
 
+From a player's log and SteamVR's own logs (SteamVR 2.18.3, PS VR2,
+RTX 3060, 90 Hz only): SteamVR turns quad layers into OpenVR overlays,
+which cannot be limited to one eye; the stereo screen's pair of layers
+looked wrong there, so SteamVR gets the panels and screen in the eye
+images (see TECHNICAL.md, "Quad layers and SteamVR").
+
 Still to check, by a player: everything with game files, in a real
 headset (SteamVR, Monado, WiVRn), and the 120 Hz pacing.
 
