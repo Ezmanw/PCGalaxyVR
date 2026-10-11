@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write  # a version tag (v1.2.3) publishes a release with the archive
 
 jobs:
   build:
@@ -37,9 +37,18 @@ jobs:
           cp build/pcgalaxyvr out/PCGalaxyVR/
           strip --strip-debug out/PCGalaxyVR/pcgalaxyvr
           cp -r tools/cook tools/install_pc.py README.md LICENSE THIRD_PARTY_NOTICES.md out/PCGalaxyVR/
+          cp platform/linux/pcgalaxyvr.desktop platform/linux/pcgalaxyvr.png out/PCGalaxyVR/
           find out/PCGalaxyVR -name __pycache__ -prune -exec rm -rf {} +
           tar -C out -czf out/PCGalaxyVR-linux-x86_64.tar.gz PCGalaxyVR
       - uses: actions/upload-artifact@v5
         with:
           name: PCGalaxyVR-linux-x86_64
           path: out/PCGalaxyVR-linux-x86_64.tar.gz
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" out/PCGalaxyVR-linux-x86_64.tar.gz
+          --title "PCGalaxyVR $GITHUB_REF_NAME"
+          --notes "Linux x86-64 build. Unpack it, convert your disc with install_pc.py, start your OpenXR runtime, then run ./pcgalaxyvr (or ./pcgalaxyvr --flat without a headset). See the README."

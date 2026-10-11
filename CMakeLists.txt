@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28)
 project(PCGalaxyVR VERSION 0.1.0 LANGUAGES C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -197,7 +197,8 @@ else()
     FetchContent_Declare(openxr
       GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
       GIT_TAG release-1.1.63
-      GIT_SHALLOW TRUE)
+      GIT_SHALLOW TRUE
+      EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(openxr)
   endif()
 
@@ -228,5 +229,12 @@ else()
   set_property(TARGET pcgalaxyvr APPEND PROPERTY LINK_DEPENDS ${CMAKE_SOURCE_DIR}/platform/linux/window.ld)
   target_link_libraries(pcgalaxyvr PRIVATE OpenXR::openxr_loader SDL2::SDL2 OpenGL::OpenGL OpenGL::GLX OpenGL::EGL X11::X11
     Threads::Threads ${CMAKE_DL_LIBS} m)
+  # cmake --install: the program, its launcher entry and icon, and the
+  # converter (share/pcgalaxyvr/tools/install_pc.py).
   install(TARGETS pcgalaxyvr RUNTIME DESTINATION bin)
+  install(FILES platform/linux/pcgalaxyvr.desktop DESTINATION share/applications)
+  install(FILES platform/linux/pcgalaxyvr.png DESTINATION share/icons/hicolor/256x256/apps)
+  install(PROGRAMS tools/install_pc.py DESTINATION share/pcgalaxyvr/tools)
+  install(DIRECTORY tools/cook DESTINATION share/pcgalaxyvr/tools
+    PATTERN __pycache__ EXCLUDE PATTERN native EXCLUDE)
 endif()

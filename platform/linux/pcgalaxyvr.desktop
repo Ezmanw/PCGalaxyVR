@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=PCGalaxyVR
+GenericName=VR game
+Comment=Super Mario Galaxy in PC VR (OpenXR); start SteamVR, Monado or WiVRn first
+Exec=pcgalaxyvr
+Icon=pcgalaxyvr
+Terminal=false
+Categories=Game;
+Keywords=VR;OpenXR;SteamVR;Monado;WiVRn;Mario;Galaxy;
+Actions=flat;
+
+[Desktop Action flat]
+Name=Play without a headset
+Exec=pcgalaxyvr --flat

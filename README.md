@@ -122,9 +122,13 @@ Resolution. Their settings do nothing here.
 
 ## Installing
 
-There are no release downloads yet: build the program from source (below;
-a few commands), or take the `PCGalaxyVR-linux-x86_64` archive from the
-latest run of the repository's *Linux build* workflow (under *Actions*).
+Download `PCGalaxyVR-linux-x86_64.tar.gz` from the
+[latest release](../../releases/latest) (or, before the first one, from the
+latest run of the *Linux build* workflow under *Actions*) and unpack it, or
+build the program from source (below; a few commands). The archive holds
+the program, the converter and a launcher entry. The commands below are run
+from a clone of the repository; from the archive, they are
+`python3 install_pc.py ...` and `./pcgalaxyvr`.
 
 ### 1. Convert your disc
 
@@ -242,7 +246,7 @@ controller settings. All the details, and the settings file, are in
 
 ## Building from source
 
-You need clang and lld 17 or newer with LLVM's libc++, CMake 3.24 or newer,
+You need clang and lld 17 or newer with LLVM's libc++, CMake 3.28 or newer,
 Ninja, git, and the SDL2, OpenGL/EGL and X11 development files:
 
 - **Ubuntu / Debian:** `sudo apt install clang lld libc++-dev libc++abi-dev cmake ninja-build git libsdl2-dev libgl-dev libopengl-dev libegl-dev libx11-dev`
@@ -255,6 +259,11 @@ cd PCGalaxyVR
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 cmake --build build
 ```
+
+`sudo cmake --install build` then puts `pcgalaxyvr` in `/usr/local/bin`,
+with an entry in your desktop's menu (with *Play without a headset* among
+its actions) and the converter as
+`/usr/local/share/pcgalaxyvr/tools/install_pc.py`.
 
 The first configure fetches the Khronos OpenXR SDK with git (its loader is
 built into the program); `-DPCGVR_SYSTEM_OPENXR=ON` uses an installed OpenXR
