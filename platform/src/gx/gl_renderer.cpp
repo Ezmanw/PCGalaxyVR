@@ -1,7 +1,6 @@
 // GLES 3.2 replay of recorded GX frames.
 #include "gl_renderer.h"
 
-#include <EGL/egl.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +16,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../gl/gl_context.h"
 #include "gl_shadergen.h"
 #include "gpu.h"
 #include "port/heap_routing.h"
@@ -79,8 +79,7 @@ inline float s11(u32 v) {
 
 GLuint compileShader(GLenum type, const std::string& src) {
     GLuint s = glCreateShader(type);
-    const char* p = src.c_str();
-    glShaderSource(s, 1, &p, nullptr);
+    glctx::shaderSource(s, src.c_str());
     glCompileShader(s);
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -537,25 +536,17 @@ void Renderer::Impl::storeBinary(const ShaderUid& uid, GLuint prog) {
 }
 
 void Renderer::Impl::startCompiler() {
-    EGLDisplay dpy = eglGetCurrentDisplay();
-    EGLContext share = eglGetCurrentContext();
-    EGLint cfgId = 0, n = 0;
-    eglQueryContext(dpy, share, EGL_CONFIG_ID, &cfgId);
-    const EGLint cfgAttr[] = {EGL_CONFIG_ID, cfgId, EGL_NONE};
-    EGLConfig cfg = nullptr;
-    eglChooseConfig(dpy, cfgAttr, &cfg, 1, &n);
-    const EGLint ctxAttr[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2, EGL_NONE};
-    EGLContext ctx = eglCreateContext(dpy, cfg, share, ctxAttr);
-    const EGLint pb[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
-    EGLSurface surf = eglCreatePbufferSurface(dpy, cfg, pb);
-    if (ctx == EGL_NO_CONTEXT || surf == EGL_NO_SURFACE) {
-        port_log("gl: no shared context for background compiles (0x%x); compiling inline", eglGetError());
+    glctx::SharedContext* ctx = glctx::createShared();
+    if (!ctx) {
+        port_log("gl: no shared context for background compiles; compiling inline");
         return;
     }
     PortHostAllocScope hostAlloc;
-    compiler = std::thread([this, dpy, ctx, surf] {
+    compiler = std::thread([this, ctx] {
         PortHostAllocScope scope;
-        eglMakeCurrent(dpy, surf, surf, ctx);
+        if (!glctx::makeCurrent(ctx)) {
+            port_fatal("gl: the shader compile thread cannot make its context current");
+        }
         for (;;) {
             ShaderUid uid;
             {
@@ -2186,7 +2177,9 @@ EfbTarget Renderer::createDepthTarget(int width, int height) {
 
 bool Renderer::setFoveation(EfbTarget& t, float focalX, float focalY, float gain, float foveaArea) {
     typedef void (*FoveationParams)(GLuint, GLuint, GLuint, GLfloat, GLfloat, GLfloat, GLfloat, GLfloat);
-    static FoveationParams params = (FoveationParams)eglGetProcAddress("glTextureFoveationParametersQCOM");
+    // Qualcomm's (Quest) only: glXGetProcAddress answers any name, so desktop
+    // GL is not asked.
+    static FoveationParams params = glctx::desktop() ? nullptr : (FoveationParams)glctx::proc("glTextureFoveationParametersQCOM");
     if (!params || !t.color) {
         return false;
     }

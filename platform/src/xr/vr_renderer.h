@@ -2,7 +2,7 @@
 // (vr_game.cpp).
 #pragma once
 
-#include <GLES3/gl32.h>
+#include "port/gl.h"
 
 #include <string>
 #include <vector>

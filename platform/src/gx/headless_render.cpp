@@ -8,11 +8,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <string>
 #include <vector>
 
+#include "../gl/gl_context.h"
 #include "gl_renderer.h"
+#include "gl_shadergen.h"
+#include "../xr/vr_renderer.h"
 #include "../xr/vr_rig.h"
 #include "gpu.h"
+#include "port/paths.h"
 #include "port/port.h"
 
 namespace {
@@ -22,10 +27,12 @@ EGLContext sContext = EGL_NO_CONTEXT;
 EGLSurface sSurface = EGL_NO_SURFACE;
 gpu::EfbTarget sTarget;
 
-bool initContext() {
+// The headless GL context, current on the calling thread.
+bool makeContext() {
     if (sContext != EGL_NO_CONTEXT) {
         return true;
     }
+#if PORT_GL_ES
     sDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (!eglInitialize(sDisplay, nullptr, nullptr)) {
         port_log("headless: eglInitialize failed");
@@ -47,6 +54,48 @@ bool initContext() {
         port_log("headless: cannot create/make current a GLES 3.2 context (0x%x)", eglGetError());
         return false;
     }
+#else
+    // Desktop OpenGL 4.5 through EGL, without a window: Mesa's surfaceless
+    // platform when there is one (no X or Wayland display needed), else the
+    // default display.
+    PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplay = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+    const char* clientExts = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    if (getPlatformDisplay && clientExts && strstr(clientExts, "EGL_MESA_platform_surfaceless")) {
+        sDisplay = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
+    }
+    if (sDisplay == EGL_NO_DISPLAY) {
+        sDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    }
+    if (!eglInitialize(sDisplay, nullptr, nullptr) || !eglBindAPI(EGL_OPENGL_API)) {
+        port_log("headless: eglInitialize failed (0x%x)", eglGetError());
+        return false;
+    }
+    const EGLint cfgAttr[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
+    EGLConfig cfg;
+    EGLint n = 0;
+    if (!eglChooseConfig(sDisplay, cfgAttr, &cfg, 1, &n) || n == 0) {
+        port_log("headless: no EGL config for desktop OpenGL");
+        return false;
+    }
+    for (EGLint profile : {EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT}) {
+        const EGLint ctxAttr[] = {EGL_CONTEXT_MAJOR_VERSION, 4, EGL_CONTEXT_MINOR_VERSION, 5, EGL_CONTEXT_OPENGL_PROFILE_MASK, profile,
+                                  EGL_CONTEXT_OPENGL_DEBUG, EGL_TRUE, EGL_NONE};
+        sContext = eglCreateContext(sDisplay, cfg, EGL_NO_CONTEXT, ctxAttr);
+        if (sContext != EGL_NO_CONTEXT) break;
+    }
+    EGLint surfaceType = 0;
+    eglGetConfigAttrib(sDisplay, cfg, EGL_SURFACE_TYPE, &surfaceType);
+    if (surfaceType & EGL_PBUFFER_BIT) {
+        const EGLint pbAttr[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE};
+        sSurface = eglCreatePbufferSurface(sDisplay, cfg, pbAttr);
+    }
+    if (sContext == EGL_NO_CONTEXT || !eglMakeCurrent(sDisplay, sSurface, sSurface, sContext)) {
+        port_log("headless: cannot create/make current an OpenGL 4.5 context (0x%x)", eglGetError());
+        return false;
+    }
+    glctx::setApi(glctx::Api::Egl);
+    glctx::applyDefaults();
+#endif
     port_log("headless: GL %s / %s", (const char*)glGetString(GL_VERSION), (const char*)glGetString(GL_RENDERER));
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
@@ -58,8 +107,26 @@ bool initContext() {
             }
         },
         nullptr);
-    gpu::setShaderCachePath(getenv("PETARI_SHADER_CACHE") ? getenv("PETARI_SHADER_CACHE") : "/data/local/tmp/petari/shaders.bin");
-    return gpu::renderer().init();
+    return true;
+}
+
+bool initContext() {
+    static bool ready = false;
+    if (ready) {
+        return true;
+    }
+    if (!makeContext()) {
+        return false;
+    }
+#ifdef __ANDROID__
+    const char* defaultCache = "/data/local/tmp/petari/shaders.bin";
+#else
+    std::string cache = port_cache_dir() + "/shaders-headless.bin";
+    const char* defaultCache = cache.c_str();
+#endif
+    gpu::setShaderCachePath(getenv("PETARI_SHADER_CACHE") ? getenv("PETARI_SHADER_CACHE") : defaultCache);
+    ready = gpu::renderer().init();
+    return ready;
 }
 
 // Minimal PNG writer (stored deflate blocks).
@@ -447,4 +514,65 @@ extern "C" unsigned long long port_headless_render(const char* path, int scale) 
     writePng(path, px.data(), w, h);
     port_log("headless: frame %llu (%u draws, %zu textures) -> %s", (unsigned long long)frame->number, frame->draws, frame->textures.size(), path);
     return frame->number;
+}
+
+// `pcgalaxyvr --gl-selftest` (platform/linux/main.cpp; CI): without game
+// files, makes the headless context and compiles what the game would: the VR
+// layer's and the renderer's own programs (vr::init, which stops the program
+// on a failure), then the generated GX programs for `count` pseudo-random
+// register states.  Returns how many of those failed to compile or link.
+extern "C" int port_headless_gl_selftest(int count) {
+    if (!makeContext()) {
+        return -1;
+    }
+    gpu::setShaderCachePath("");
+    vr::init();
+    uint32_t seed = 0x5eed1234u;
+    auto rnd = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return seed ^ (seed >> 15);
+    };
+    std::vector<uint32_t> bp(0x100), xf(0x1000);
+    int failed = 0;
+    for (int i = 0; i < count; i++) {
+        for (uint32_t& w : bp) w = rnd();
+        for (uint32_t& w : xf) w = rnd();
+        xf[0x3F] = rnd() % 9;  // texture coordinate generators, as the game sets them
+        xf[0x09] = rnd() % 3;  // color channels
+        gpu::ShaderUid uid = gpu::makeShaderUid(bp.data(), xf.data(), rnd() & 0xFFFF, (i & 7) == 7);
+        uid.cutaway = (i % 5) == 0;
+        std::string vsSrc = gpu::genVertexShader(uid), fsSrc = gpu::genFragmentShader(uid);
+        GLuint prog = glCreateProgram();
+        bool ok = true;
+        for (int k = 0; k < 2; k++) {
+            GLuint sh = glCreateShader(k ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER);
+            glctx::shaderSource(sh, (k ? fsSrc : vsSrc).c_str());
+            glCompileShader(sh);
+            GLint status = 0;
+            glGetShaderiv(sh, GL_COMPILE_STATUS, &status);
+            if (!status) {
+                char log[2048];
+                glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
+                port_log("selftest: program %d: %s shader: %s", i, k ? "fragment" : "vertex", log);
+                ok = false;
+            }
+            glAttachShader(prog, sh);
+            glDeleteShader(sh);
+        }
+        if (ok) {
+            glLinkProgram(prog);
+            GLint status = 0;
+            glGetProgramiv(prog, GL_LINK_STATUS, &status);
+            if (!status) {
+                char log[2048];
+                glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+                port_log("selftest: program %d: link: %s", i, log);
+                ok = false;
+            }
+        }
+        glDeleteProgram(prog);
+        failed += ok ? 0 : 1;
+    }
+    port_log("selftest: %d of %d generated GX programs built%s", count - failed, count, failed ? "" : "; the VR layer's programs too");
+    return failed;
 }

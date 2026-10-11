@@ -1,8 +1,15 @@
-# Controls (Meta Quest Touch Plus)
+# Controls
 
-The game still sees a Wii Remote with a Nunchuk attached. The Touch Plus
+The game still sees a Wii Remote with a Nunchuk attached. The VR
 controllers are mapped onto them like this. The mapping lives in
-`updateInput()` in `platform/src/xr/xr_app.cpp`.
+`updateInput()` in `platform/src/xr/xr_app.cpp`, and the buttons of each
+kind of controller in `suggestBindings()` there.
+
+This page names the Meta Touch (Plus) buttons. On a PC, the
+[README's controls table](../README.md#controls) gives the same controls on
+a Valve Index (its left A and B stand for X and Y), Vive wands and Windows
+Mixed Reality controllers; SteamVR can rebind any of them in its controller
+settings.
 
 | Touch Plus | Wii | In Super Mario Galaxy |
 |---|---|---|
@@ -60,7 +67,8 @@ laser never counts as a shake.
 - The screen, the diorama and the HUD panel are placed straight ahead of
   where you are and face when the game starts, and again when you put the
   headset back on. To recentre at any time, hold the Meta button on the
-  right controller.
+  right controller (on a PC, use your runtime's recentre: SteamVR's
+  dashboard, or WiVRn's and Monado's own).
 - By default the world is at 1/500 scale, with Mario about 1.5 m in front
   of you and 0.8 m below eye level.
 - When scenery hides Mario from you, the part between you and him fades
@@ -235,8 +243,12 @@ defaults).
 
 ## Comfort settings
 
-Every setting of the VR settings panel is a line of `petari_vr.ini`, next to
-the game data in `/sdcard/Android/data/com.galaxy.quest/files/`. The panel
+Every setting of the VR settings panel is a line of `petari_vr.ini`: on a
+PC in `~/.config/PCGalaxyVR/`, on the Quest next to the game data in
+`/sdcard/Android/data/com.galaxy.quest/files/`. Settings for Meta's runtime
+only (`space_warp`, `passthrough`, `super_resolution`, `high_clocks`,
+`refresh_rate`) do nothing on a PC, except `refresh_rate` with a runtime
+that lets the game choose (Monado-based ones can). The panel
 writes it for you; you can also create or edit it yourself, with any of
 these lines. The file is read when the app starts.
 

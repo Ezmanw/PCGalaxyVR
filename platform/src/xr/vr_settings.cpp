@@ -15,7 +15,7 @@
 // The panel is drawn on the CPU into a texture whenever something on it
 // changes: rounded shapes with anti-aliased edges and text from the baked
 // glyph atlas (ui_canvas.h).
-#include <GLES3/gl32.h>
+#include "port/gl.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>

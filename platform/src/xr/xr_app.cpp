@@ -1,34 +1,59 @@
-// OpenXR application: EGL/GLES context, session lifecycle, swapchains, Touch
+// OpenXR application: the GL context, session lifecycle, swapchains,
 // controller actions, and the headset frame loop.
 //
-// Quest requirements verified against Meta's docs (2026-09-28): Khronos loader
-// initialised through xrInitializeLoaderKHR + XrLoaderInitInfoAndroidKHR,
-// XR_KHR_android_create_instance, Touch Plus via XR_META_touch_controller_plus.
+// Quest (Android): EGL and OpenGL ES.  Requirements verified against Meta's
+// docs (2026-09-28): Khronos loader initialised through xrInitializeLoaderKHR
+// + XrLoaderInitInfoAndroidKHR, XR_KHR_android_create_instance, Touch Plus via
+// XR_META_touch_controller_plus.
+//
+// PC (Linux): desktop OpenGL 4.5 in a GLX context made by SDL2 (forced onto
+// X11, or XWayland), handed to the runtime with XR_KHR_opengl_enable's Xlib
+// binding, which SteamVR and Monado (and WiVRn) share.  An SDL window on the
+// desktop shows the left eye.  Bindings for the PC's common controllers.
+#ifdef __ANDROID__
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <GLES3/gl32.h>
 #include <android/log.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
+#else
+#include <SDL.h>
+#include <SDL_syswm.h>
+#include <X11/Xlib.h>
+#endif
+#include "port/gl.h"
+#if !PORT_GL_ES
+#include <GL/glx.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+#ifdef __ANDROID__
 #define XR_USE_PLATFORM_ANDROID
 #define XR_USE_GRAPHICS_API_OPENGL_ES
+#else
+#define XR_USE_PLATFORM_XLIB
+#define XR_USE_GRAPHICS_API_OPENGL
+#endif
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
 #include "port/heap_routing.h"
 #include "port/input.h"
 #include "port/input_script.h"
+#include "port/paths.h"
+#include "port/pc_app.h"
 #include "port/port.h"
+#include "../gl/gl_context.h"
 #include "../gx/gl_renderer.h"
 #include "vr_renderer.h"
 #include "xmath.h"
@@ -48,15 +73,24 @@ namespace {
         }                                                                                                                                            \
     } while (0)
 
+#ifdef __ANDROID__
+typedef XrSwapchainImageOpenGLESKHR XrSwapchainImageGL;
+const XrStructureType kSwapchainImageType = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR;
+#else
+typedef XrSwapchainImageOpenGLKHR XrSwapchainImageGL;
+const XrStructureType kSwapchainImageType = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR;
+#endif
+
 struct Swapchain {
     XrSwapchain handle = XR_NULL_HANDLE;
     int32_t width = 0, height = 0;
     uint32_t mips = 1;
-    std::vector<XrSwapchainImageOpenGLESKHR> images;
+    std::vector<XrSwapchainImageGL> images;
     std::vector<GLuint> fbos;
 };
 
 struct App {
+#ifdef __ANDROID__
     android_app* android = nullptr;
 
     // EGL
@@ -64,6 +98,18 @@ struct App {
     EGLConfig config = nullptr;
     EGLContext context = EGL_NO_CONTEXT;
     EGLSurface surface = EGL_NO_SURFACE;
+#else
+    // SDL's window (the desktop mirror) and its GLX context.
+    SDL_Window* window = nullptr;
+    SDL_GLContext glContext = nullptr;
+    Display* xDisplay = nullptr;
+    GLXFBConfig fbConfig = nullptr;
+    VisualID visualId = 0;
+    GLXDrawable drawable = 0;
+    GLXContext glxContext = nullptr;
+    bool mirror = true;       // show the left eye in the window
+    bool mirrorDrawn = false;  // something was drawn into it this frame
+#endif
 
     // OpenXR
     XrInstance instance = XR_NULL_HANDLE;
@@ -210,9 +256,10 @@ void loadDebugEnv(const std::string& path) {
 }
 
 // ---------------------------------------------------------------------------
-// EGL
+// The GL context
 // ---------------------------------------------------------------------------
-void initEgl(App& a) {
+#ifdef __ANDROID__
+void initGl(App& a) {
     a.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     eglInitialize(a.display, nullptr, nullptr);
     const EGLint cfgAttr[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0,
@@ -232,6 +279,101 @@ void initEgl(App& a) {
     port_log("GL: %s / %s / %s", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
 }
 
+void mirrorEye(App&, GLuint, int, int) {}  // the headset has no desktop
+void presentMirror(App&) {}
+#else
+// An SDL window with a GLX context: desktop OpenGL 4.5, a compatibility
+// profile (GLES's defaults, see port/gl.h) or else a core one.  OpenXR's
+// OpenGL binding on Linux is Xlib's, so SDL is kept on X11 (XWayland under a
+// Wayland desktop).
+void initGl(App& a) {
+    SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
+    SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "0");
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+        port_fatal("cannot open a window on the X11 display (%s). PCGalaxyVR needs an X11 session, or XWayland under Wayland.", SDL_GetError());
+    }
+    for (int profile : {SDL_GL_CONTEXT_PROFILE_COMPATIBILITY, SDL_GL_CONTEXT_PROFILE_CORE}) {
+        SDL_GL_ResetAttributes();
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, profile);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+        SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+        a.window = SDL_CreateWindow("PCGalaxyVR", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 540,
+                                    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | (a.mirror ? 0 : SDL_WINDOW_MINIMIZED));
+        if (a.window) {
+            a.glContext = SDL_GL_CreateContext(a.window);
+            if (a.glContext) break;
+            SDL_DestroyWindow(a.window);
+            a.window = nullptr;
+        }
+    }
+    if (!a.glContext) {
+        port_fatal("cannot make an OpenGL 4.5 context: %s", SDL_GetError());
+    }
+    SDL_GL_MakeCurrent(a.window, a.glContext);
+    SDL_GL_SetSwapInterval(0);  // the headset paces the frame loop, not the desktop
+    a.xDisplay = glXGetCurrentDisplay();
+    a.glxContext = glXGetCurrentContext();
+    a.drawable = glXGetCurrentDrawable();
+    int cfgId = 0, screen = 0;
+    glXQueryContext(a.xDisplay, a.glxContext, GLX_FBCONFIG_ID, &cfgId);
+    glXQueryContext(a.xDisplay, a.glxContext, GLX_SCREEN, &screen);
+    const int cfgAttr[] = {GLX_FBCONFIG_ID, cfgId, None};
+    int n = 0;
+    GLXFBConfig* cfgs = glXChooseFBConfig(a.xDisplay, screen, cfgAttr, &n);
+    if (!cfgs || n == 0) {
+        port_fatal("cannot find the GLX config of the OpenGL context");
+    }
+    a.fbConfig = cfgs[0];
+    XFree(cfgs);
+    if (XVisualInfo* vi = glXGetVisualFromFBConfig(a.xDisplay, a.fbConfig)) {
+        a.visualId = vi->visualid;
+        XFree(vi);
+    }
+    glctx::setApi(glctx::Api::Glx);
+    port_log("GL: %s / %s / %s", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    glctx::applyDefaults();
+}
+
+// The left eye's image (the part rendered) into the desktop window, cropped
+// to the window's shape.  Called while the image is still acquired.
+void mirrorEye(App& a, GLuint fbo, int w, int h) {
+    if (!a.mirror || w <= 0 || h <= 0 || (SDL_GetWindowFlags(a.window) & SDL_WINDOW_MINIMIZED)) {
+        return;
+    }
+    int ww = 0, wh = 0;
+    SDL_GL_GetDrawableSize(a.window, &ww, &wh);
+    if (ww <= 0 || wh <= 0) return;
+    int sx0 = 0, sy0 = 0, sx1 = w, sy1 = h;
+    if ((long)w * wh > (long)h * ww) {
+        int cw = (int)((long)h * ww / wh);
+        sx0 = (w - cw) / 2;
+        sx1 = sx0 + cw;
+    } else {
+        int ch = (int)((long)w * wh / ww);
+        sy0 = (h - ch) / 2;
+        sy1 = sy0 + ch;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    // A plain copy of the sRGB-encoded image: the window shows it as it is.
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glBlitFramebuffer(sx0, sy0, sx1, sy1, 0, 0, ww, wh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glEnable(GL_FRAMEBUFFER_SRGB);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    a.mirrorDrawn = true;
+}
+
+void presentMirror(App& a) {
+    if (a.mirrorDrawn) {
+        SDL_GL_SwapWindow(a.window);
+        a.mirrorDrawn = false;
+    }
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // OpenXR instance / session
 // ---------------------------------------------------------------------------
@@ -244,20 +386,38 @@ bool hasExtension(const std::vector<XrExtensionProperties>& exts, const char* na
     return false;
 }
 
+// Instance creation fails without a runtime (none installed, or SteamVR,
+// Monado or WiVRn not started): said plainly rather than as an error code.
+void noRuntime(XrResult r) {
+    port_fatal("no OpenXR runtime answered (%d). Start SteamVR, Monado or WiVRn (with the headset connected) first; the active runtime is "
+               "the one ~/.config/openxr/1/active_runtime.json or /etc/xdg/openxr/1/active_runtime.json names.",
+               (int)r);
+}
+
 void initInstance(App& a) {
+#ifdef __ANDROID__
     PFN_xrInitializeLoaderKHR initLoader = nullptr;
     XR_CHECK(xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction*)&initLoader));
     XrLoaderInitInfoAndroidKHR loaderInfo{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
     loaderInfo.applicationVM = a.android->activity->vm;
     loaderInfo.applicationContext = a.android->activity->clazz;
     XR_CHECK(initLoader((const XrLoaderInitInfoBaseHeaderKHR*)&loaderInfo));
+#endif
 
     uint32_t count = 0;
-    XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr));
+    XrResult er = xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
+    if (XR_FAILED(er)) noRuntime(er);
     std::vector<XrExtensionProperties> exts(count, {XR_TYPE_EXTENSION_PROPERTIES});
     XR_CHECK(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, exts.data()));
 
+#ifdef __ANDROID__
     std::vector<const char*> enable = {XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME, XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME};
+#else
+    if (!hasExtension(exts, XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)) {
+        port_fatal("the OpenXR runtime has no OpenGL support (XR_KHR_opengl_enable), which PCGalaxyVR draws with");
+    }
+    std::vector<const char*> enable = {XR_KHR_OPENGL_ENABLE_EXTENSION_NAME};
+#endif
     a.hasRefreshRate = hasExtension(exts, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     if (a.hasRefreshRate) {
         enable.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
@@ -307,24 +467,51 @@ void initInstance(App& a) {
         port_log("XR runtime extensions:%s", names.substr(i, 900).c_str());
     }
 
+    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+#ifdef __ANDROID__
     XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
     androidInfo.applicationVM = a.android->activity->vm;
     androidInfo.applicationActivity = a.android->activity->clazz;
-
-    XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
     ci.next = &androidInfo;
     strcpy(ci.applicationInfo.applicationName, "GalaxyQuest");
+#else
+    strcpy(ci.applicationInfo.applicationName, "PCGalaxyVR");
+#endif
     ci.applicationInfo.applicationVersion = 1;
     strcpy(ci.applicationInfo.engineName, "Petari");
     ci.applicationInfo.engineVersion = 1;
     ci.applicationInfo.apiVersion = XR_API_VERSION_1_0;
     ci.enabledExtensionCount = (uint32_t)enable.size();
     ci.enabledExtensionNames = enable.data();
-    XR_CHECK(xrCreateInstance(&ci, &a.instance));
+    XrResult cr = xrCreateInstance(&ci, &a.instance);
+    if (XR_FAILED(cr)) noRuntime(cr);
+    XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
+    if (XR_SUCCEEDED(xrGetInstanceProperties(a.instance, &ip))) {
+        port_log("XR runtime: %s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion), XR_VERSION_MINOR(ip.runtimeVersion),
+                 XR_VERSION_PATCH(ip.runtimeVersion));
+    }
 
     XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
     sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+#ifdef __ANDROID__
     XR_CHECK(xrGetSystem(a.instance, &sgi, &a.system));
+#else
+    // On a PC the headset may not be connected or awake yet: wait for it
+    // (the desktop window can be closed meanwhile).
+    for (int tries = 0;; tries++) {
+        XrResult r = xrGetSystem(a.instance, &sgi, &a.system);
+        if (XR_SUCCEEDED(r)) break;
+        if (r != XR_ERROR_FORM_FACTOR_UNAVAILABLE) port_fatal("xrGetSystem failed: %d", (int)r);
+        if (tries == 0) port_log("XR: no headset yet (connect it, or wake it up); waiting");
+        SDL_SetWindowTitle(a.window, "PCGalaxyVR: waiting for the headset");
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) exit(0);
+        }
+        SDL_Delay(500);
+    }
+    SDL_SetWindowTitle(a.window, "PCGalaxyVR");
+#endif
 
     XrSystemProperties props{XR_TYPE_SYSTEM_PROPERTIES};
     XrSystemSpaceWarpPropertiesFB warpProps{XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB};
@@ -354,10 +541,19 @@ void initInstance(App& a) {
         port_log("XR SpaceWarp: not available");
     }
 
+#ifdef __ANDROID__
     PFN_xrGetOpenGLESGraphicsRequirementsKHR getReq = nullptr;
     XR_CHECK(xrGetInstanceProcAddr(a.instance, "xrGetOpenGLESGraphicsRequirementsKHR", (PFN_xrVoidFunction*)&getReq));
     XrGraphicsRequirementsOpenGLESKHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR};
     XR_CHECK(getReq(a.instance, a.system, &req));
+#else
+    PFN_xrGetOpenGLGraphicsRequirementsKHR getReq = nullptr;
+    XR_CHECK(xrGetInstanceProcAddr(a.instance, "xrGetOpenGLGraphicsRequirementsKHR", (PFN_xrVoidFunction*)&getReq));
+    XrGraphicsRequirementsOpenGLKHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR};
+    XR_CHECK(getReq(a.instance, a.system, &req));
+    port_log("XR: the runtime takes OpenGL %u.%u to %u.%u", XR_VERSION_MAJOR(req.minApiVersionSupported), XR_VERSION_MINOR(req.minApiVersionSupported),
+             XR_VERSION_MAJOR(req.maxApiVersionSupported), XR_VERSION_MINOR(req.maxApiVersionSupported));
+#endif
 
     if (a.hasRefreshRate) {
         xrGetInstanceProcAddr(a.instance, "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction*)&a.xrRequestDisplayRefreshRateFB);
@@ -499,33 +695,121 @@ XrPath path(App& a, const char* s) {
     return p;
 }
 
-void suggest(App& a, const char* profile, bool touchPlus) {
-    std::vector<XrActionSuggestedBinding> b = {
-        {a.moveAction, path(a, "/user/hand/left/input/thumbstick")},
-        {a.lookAction, path(a, "/user/hand/right/input/thumbstick")},
-        {a.aAction, path(a, "/user/hand/right/input/a/click")},
-        {a.bAction, path(a, "/user/hand/right/input/b/click")},
-        {a.xAction, path(a, "/user/hand/left/input/x/click")},
-        {a.yAction, path(a, "/user/hand/left/input/y/click")},
-        {a.triggerAction, path(a, "/user/hand/left/input/trigger/value")},
-        {a.triggerAction, path(a, "/user/hand/right/input/trigger/value")},
-        {a.gripAction, path(a, "/user/hand/left/input/squeeze/value")},
-        {a.gripAction, path(a, "/user/hand/right/input/squeeze/value")},
-        {a.menuAction, path(a, "/user/hand/left/input/menu/click")},
-        {a.stickClickAction, path(a, "/user/hand/left/input/thumbstick/click")},
-        {a.stickClickAction, path(a, "/user/hand/right/input/thumbstick/click")},
-        {a.aimPoseAction, path(a, "/user/hand/left/input/aim/pose")},
-        {a.aimPoseAction, path(a, "/user/hand/right/input/aim/pose")},
-        {a.hapticAction, path(a, "/user/hand/left/output/haptic")},
-        {a.hapticAction, path(a, "/user/hand/right/output/haptic")},
-    };
-    (void)touchPlus;
+struct Binding {
+    XrAction App::*action;
+    const char* path;
+};
+
+void suggest(App& a, const char* profile, std::initializer_list<Binding> bindings) {
+    std::vector<XrActionSuggestedBinding> b;
+    for (const Binding& x : bindings) {
+        b.push_back({a.*x.action, path(a, x.path)});
+    }
     XrInteractionProfileSuggestedBinding s{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     s.interactionProfile = path(a, profile);
     s.suggestedBindings = b.data();
     s.countSuggestedBindings = (uint32_t)b.size();
     XrResult r = xrSuggestInteractionProfileBindings(a.instance, &s);
     port_log("bindings for %s: %d", profile, (int)r);
+}
+
+// The Wii controls on each controller (docs/CONTROLS.md).  Every path must
+// exist on its profile: one that does not makes the runtime refuse them all.
+void suggestBindings(App& a) {
+    // Meta Touch and Touch Plus (the Quest; Rift and Quest on a PC).
+    const std::initializer_list<Binding> touch = {
+        {&App::moveAction, "/user/hand/left/input/thumbstick"},
+        {&App::lookAction, "/user/hand/right/input/thumbstick"},
+        {&App::aAction, "/user/hand/right/input/a/click"},
+        {&App::bAction, "/user/hand/right/input/b/click"},
+        {&App::xAction, "/user/hand/left/input/x/click"},
+        {&App::yAction, "/user/hand/left/input/y/click"},
+        {&App::triggerAction, "/user/hand/left/input/trigger/value"},
+        {&App::triggerAction, "/user/hand/right/input/trigger/value"},
+        {&App::gripAction, "/user/hand/left/input/squeeze/value"},
+        {&App::gripAction, "/user/hand/right/input/squeeze/value"},
+        {&App::menuAction, "/user/hand/left/input/menu/click"},
+        {&App::stickClickAction, "/user/hand/left/input/thumbstick/click"},
+        {&App::stickClickAction, "/user/hand/right/input/thumbstick/click"},
+        {&App::aimPoseAction, "/user/hand/left/input/aim/pose"},
+        {&App::aimPoseAction, "/user/hand/right/input/aim/pose"},
+        {&App::hapticAction, "/user/hand/left/output/haptic"},
+        {&App::hapticAction, "/user/hand/right/output/haptic"},
+    };
+    if (a.hasTouchPlus) {
+        suggest(a, "/interaction_profiles/meta/touch_controller_plus", touch);
+    }
+    suggest(a, "/interaction_profiles/oculus/touch_controller", touch);
+#ifndef __ANDROID__
+    // Valve Index: A and B on both hands; the left ones stand for X and Y.
+    suggest(a, "/interaction_profiles/valve/index_controller",
+            {
+                {&App::moveAction, "/user/hand/left/input/thumbstick"},
+                {&App::lookAction, "/user/hand/right/input/thumbstick"},
+                {&App::aAction, "/user/hand/right/input/a/click"},
+                {&App::bAction, "/user/hand/right/input/b/click"},
+                {&App::xAction, "/user/hand/left/input/a/click"},
+                {&App::yAction, "/user/hand/left/input/b/click"},
+                {&App::triggerAction, "/user/hand/left/input/trigger/value"},
+                {&App::triggerAction, "/user/hand/right/input/trigger/value"},
+                {&App::gripAction, "/user/hand/left/input/squeeze/value"},
+                {&App::gripAction, "/user/hand/right/input/squeeze/value"},
+                {&App::stickClickAction, "/user/hand/left/input/thumbstick/click"},
+                {&App::stickClickAction, "/user/hand/right/input/thumbstick/click"},
+                {&App::aimPoseAction, "/user/hand/left/input/aim/pose"},
+                {&App::aimPoseAction, "/user/hand/right/input/aim/pose"},
+                {&App::hapticAction, "/user/hand/left/output/haptic"},
+                {&App::hapticAction, "/user/hand/right/output/haptic"},
+            });
+    // HTC Vive wands: trackpads for the sticks, the right one's click for A,
+    // the right grip for spin, the menu buttons for pause.
+    suggest(a, "/interaction_profiles/htc/vive_controller",
+            {
+                {&App::moveAction, "/user/hand/left/input/trackpad"},
+                {&App::lookAction, "/user/hand/right/input/trackpad"},
+                {&App::aAction, "/user/hand/right/input/trackpad/click"},
+                {&App::bAction, "/user/hand/right/input/squeeze/click"},
+                {&App::xAction, "/user/hand/left/input/menu/click"},
+                {&App::menuAction, "/user/hand/right/input/menu/click"},
+                {&App::triggerAction, "/user/hand/left/input/trigger/value"},
+                {&App::triggerAction, "/user/hand/right/input/trigger/value"},
+                {&App::gripAction, "/user/hand/left/input/squeeze/click"},
+                {&App::aimPoseAction, "/user/hand/left/input/aim/pose"},
+                {&App::aimPoseAction, "/user/hand/right/input/aim/pose"},
+                {&App::hapticAction, "/user/hand/left/output/haptic"},
+                {&App::hapticAction, "/user/hand/right/output/haptic"},
+            });
+    // Windows Mixed Reality: sticks, the right trackpad's click for A.
+    suggest(a, "/interaction_profiles/microsoft/motion_controller",
+            {
+                {&App::moveAction, "/user/hand/left/input/thumbstick"},
+                {&App::lookAction, "/user/hand/right/input/thumbstick"},
+                {&App::aAction, "/user/hand/right/input/trackpad/click"},
+                {&App::bAction, "/user/hand/right/input/squeeze/click"},
+                {&App::xAction, "/user/hand/left/input/menu/click"},
+                {&App::menuAction, "/user/hand/right/input/menu/click"},
+                {&App::triggerAction, "/user/hand/left/input/trigger/value"},
+                {&App::triggerAction, "/user/hand/right/input/trigger/value"},
+                {&App::gripAction, "/user/hand/left/input/squeeze/click"},
+                {&App::stickClickAction, "/user/hand/left/input/thumbstick/click"},
+                {&App::stickClickAction, "/user/hand/right/input/thumbstick/click"},
+                {&App::aimPoseAction, "/user/hand/left/input/aim/pose"},
+                {&App::aimPoseAction, "/user/hand/right/input/aim/pose"},
+                {&App::hapticAction, "/user/hand/left/output/haptic"},
+                {&App::hapticAction, "/user/hand/right/output/haptic"},
+            });
+    // The fallback every runtime has: enough to point at menus and confirm.
+    suggest(a, "/interaction_profiles/khr/simple_controller",
+            {
+                {&App::aAction, "/user/hand/right/input/select/click"},
+                {&App::menuAction, "/user/hand/left/input/menu/click"},
+                {&App::menuAction, "/user/hand/right/input/menu/click"},
+                {&App::aimPoseAction, "/user/hand/left/input/aim/pose"},
+                {&App::aimPoseAction, "/user/hand/right/input/aim/pose"},
+                {&App::hapticAction, "/user/hand/left/output/haptic"},
+                {&App::hapticAction, "/user/hand/right/output/haptic"},
+            });
+#endif
 }
 
 void initActions(App& a) {
@@ -548,17 +832,23 @@ void initActions(App& a) {
     a.aimPoseAction = makeAction(a, "aim_pose", XR_ACTION_TYPE_POSE_INPUT, true);
     a.hapticAction = makeAction(a, "haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT, true);
 
-    if (a.hasTouchPlus) {
-        suggest(a, "/interaction_profiles/meta/touch_controller_plus", true);
-    }
-    suggest(a, "/interaction_profiles/oculus/touch_controller", false);
+    suggestBindings(a);
 }
 
 void initSession(App& a) {
+#ifdef __ANDROID__
     XrGraphicsBindingOpenGLESAndroidKHR binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR};
     binding.display = a.display;
     binding.config = a.config;
     binding.context = a.context;
+#else
+    XrGraphicsBindingOpenGLXlibKHR binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR};
+    binding.xDisplay = a.xDisplay;
+    binding.visualid = (uint32_t)a.visualId;
+    binding.glxFBConfig = a.fbConfig;
+    binding.glxDrawable = a.drawable;
+    binding.glxContext = a.glxContext;
+#endif
     XrSessionCreateInfo sci{XR_TYPE_SESSION_CREATE_INFO};
     sci.next = &binding;
     sci.systemId = a.system;
@@ -629,7 +919,7 @@ void initSession(App& a) {
             XR_CHECK(xrCreateSwapchain(a.session, &ci, &sc.handle));
             uint32_t n = 0;
             XR_CHECK(xrEnumerateSwapchainImages(sc.handle, 0, &n, nullptr));
-            sc.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+            sc.images.assign(n, {kSwapchainImageType});
             XR_CHECK(xrEnumerateSwapchainImages(sc.handle, n, &n, (XrSwapchainImageBaseHeader*)sc.images.data()));
             // Color only: the composite into the swapchain (vr::renderEye)
             // draws without depth.
@@ -677,7 +967,7 @@ void initSession(App& a) {
                 XR_CHECK(xrCreateSwapchain(a.session, &ci, &sc.handle));
                 uint32_t n = 0;
                 XR_CHECK(xrEnumerateSwapchainImages(sc.handle, 0, &n, nullptr));
-                sc.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+                sc.images.assign(n, {kSwapchainImageType});
                 XR_CHECK(xrEnumerateSwapchainImages(sc.handle, n, &n, (XrSwapchainImageBaseHeader*)sc.images.data()));
             }
         }
@@ -722,7 +1012,7 @@ void initUiLayers(App& a) {
         XR_CHECK(xrCreateSwapchain(a.session, &ci, &sc.handle));
         uint32_t n = 0;
         XR_CHECK(xrEnumerateSwapchainImages(sc.handle, 0, &n, nullptr));
-        sc.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+        sc.images.assign(n, {kSwapchainImageType});
         XR_CHECK(xrEnumerateSwapchainImages(sc.handle, n, &n, (XrSwapchainImageBaseHeader*)sc.images.data()));
         sc.fbos.resize(n);
         glGenFramebuffers((GLsizei)n, sc.fbos.data());
@@ -1358,6 +1648,7 @@ void renderPair(App& a, int s, const vr::FrameInfo& frame, const XrView views[2]
         a.setPose[s][e] = views[e].pose;
         a.setFov[s][e] = views[e].fov;
     }
+    mirrorEye(a, a.eyes[s][0].fbos[idx[0]], a.setRect[s][0].width, a.setRect[s][0].height);
     maybeSaveShot(a, s, idx);
     for (int e = 0; e < 2; e++) {
         XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -1508,6 +1799,7 @@ void renderFrame(App& a) {
         xm::Quat dq;
         xm::Vec3 dp;
         a.warpSkip = vr::finishMotion(&dq, &dp);
+        mirrorEye(a, a.eyes[s][0].fbos[idx[0]], a.setRect[s][0].width, a.setRect[s][0].height);
         a.warpDelta.orientation = {dq.x, dq.y, dq.z, dq.w};
         a.warpDelta.position = {dp.x, dp.y, dp.z};
         maybeSaveShot(a, s, idx, a.motion[0].images[motionIdx[0]].image);
@@ -1539,6 +1831,7 @@ void renderFrame(App& a) {
         a.heldIdx = acquireImage(sc);
         vr::Extent used = vr::renderEye(0, a.setFrame, sc.fbos[a.heldIdx], sc.width, sc.height);
         a.setRect[a.renderSet][0] = {used.width, used.height};
+        mirrorEye(a, sc.fbos[a.heldIdx], used.width, used.height);
         a.setPose[a.renderSet][0] = views[0].pose;
         a.setFov[a.renderSet][0] = views[0].fov;
         a.heldSet = a.renderSet;
@@ -1728,6 +2021,7 @@ void renderFrame(App& a) {
         XR_CHECK(end);
     }
     a.lastWorkNs = port_host_time_ns() - a.workStartNs;
+    presentMirror(a);
     // The runtime's measure of the GPU (for the dynamic resolution): an app
     // frame spans two eyes and two refreshes with SpaceWarp, one eye and one
     // refresh when the eyes take alternate refreshes, both eyes and one
@@ -1749,6 +2043,66 @@ void renderFrame(App& a) {
     }
 }
 
+void bootGame(const std::string& dataRoot) {
+    port_log("game files: %s", dataRoot.c_str());
+    gBooted = true;
+    port_boot(dataRoot.c_str(), gSaveRoot.c_str());
+}
+
+// Sets up what both platforms share once their folders are known: the debug
+// variables, the input script, the saves' folder, the screenshots.
+void initDebugHooks(const std::string& debugEnv, const std::string& shotDir) {
+    loadDebugEnv(debugEnv);
+    if (const char* script = getenv("PETARI_INPUT")) {
+        gScriptCount = portParseInputScript(script, gScript, 1024);
+    }
+    if (const char* saves = getenv("PETARI_SAVE_DIR")) {
+        gSaveRoot = saves;  // tests keep away from the player's saves
+    }
+    if (const char* shots = getenv("PETARI_VRSHOT_MS")) {
+        gShotIntervalNs = (int64_t)atoi(shots) * 1000000;
+        gShotDir = shotDir;
+        mkdir(gShotDir.c_str(), 0770);
+    }
+}
+
+// The headset's session and everything drawn with it, once the GL context
+// is up.
+void initXr(App& a, const std::string& shaderCache) {
+    initInstance(a);
+    initActions(a);
+    initSession(a);
+    gpu::setShaderCachePath(shaderCache.c_str());
+    vr::init();
+    initUiLayers(a);
+    initPerfMetrics(a);
+
+    // The boot time, for debug hooks timed from it (PETARI_INPUT, PETARI_WARP).
+    gBootNs = port_host_time_ns();
+    char bootMs[32];
+    snprintf(bootMs, sizeof(bootMs), "%lld", (long long)(gBootNs / 1000000));
+    setenv("PETARI_T0_MS", bootMs, 1);
+}
+
+// The game's files: `only` when given (nothing else is tried), else the
+// folder chosen on the setup screen before, else `fallback`.  Empty when
+// none holds converted files (the setup screen opens then: the game would
+// stop at its first file).
+std::string findGameFiles(const char* only, const std::string& fallback) {
+    bool ready = false;
+    if (only) {
+        return vr::isGameFolder(only, &ready) && ready ? only : "";
+    }
+    if (!vr::gamePath().empty() && vr::isGameFolder(vr::gamePath(), &ready) && ready) {
+        return vr::gamePath();
+    }
+    if (vr::isGameFolder(fallback, &ready) && ready) {
+        return fallback;
+    }
+    return "";
+}
+
+#ifdef __ANDROID__
 // Android's all files access (MANAGE_EXTERNAL_STORAGE), through JNI (the app
 // has no Java code): whether the app has it, and opening the settings page
 // where the player grants it.
@@ -1808,12 +2162,6 @@ void requestAllFilesAccess(App& a) {
     port_log("setup: all files access settings %s", ok ? "opened" : "could not be opened");
 }
 
-void bootGame(const std::string& dataRoot) {
-    port_log("game files: %s", dataRoot.c_str());
-    gBooted = true;
-    port_boot(dataRoot.c_str(), gSaveRoot.c_str());
-}
-
 void onAppCmd(android_app* app, int32_t cmd) {
     (void)app;
     switch (cmd) {
@@ -1847,48 +2195,14 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     mkdir(saveRoot.c_str(), 0770);
 
     port_log_file((ext + "/petari_log.txt").c_str());
-    loadDebugEnv(ext + "/petari_debug.env");
-    if (const char* script = getenv("PETARI_INPUT")) {
-        gScriptCount = portParseInputScript(script, gScript, 1024);
-    }
-    if (const char* saves = getenv("PETARI_SAVE_DIR")) {
-        saveRoot = saves;  // tests keep away from the player's saves
-    }
     gSaveRoot = saveRoot;
-    if (const char* shots = getenv("PETARI_VRSHOT_MS")) {
-        gShotIntervalNs = (int64_t)atoi(shots) * 1000000;
-        gShotDir = ext + "/vrshots";
-        mkdir(gShotDir.c_str(), 0770);
-    }
+    initDebugHooks(ext + "/petari_debug.env", ext + "/vrshots");
     vr::loadSettings((ext + "/petari_vr.ini").c_str());  // before the swapchains are sized
-    initEgl(a);
-    initInstance(a);
-    initActions(a);
-    initSession(a);
-    gpu::setShaderCachePath((std::string(app->activity->internalDataPath) + "/shaders.bin").c_str());
-    vr::init();
-    initUiLayers(a);
-    initPerfMetrics(a);
-
-    // The boot time, for debug hooks timed from it (PETARI_INPUT, PETARI_WARP).
-    gBootNs = port_host_time_ns();
-    char bootMs[32];
-    snprintf(bootMs, sizeof(bootMs), "%lld", (long long)(gBootNs / 1000000));
-    setenv("PETARI_T0_MS", bootMs, 1);
-    // The game's files: the folder chosen on the setup screen before, else
-    // the app's own files/game.  Without them the setup screen opens (the
-    // game would stop at its first file).
-    std::string dataRoot;
-    bool ready = false;
-    if (const char* only = getenv("PETARI_GAME_ROOT")) {
-        // Debug (petari_debug.env): look only there, e.g. a missing folder
-        // to see the setup screen without moving the player's files.
-        if (vr::isGameFolder(only, &ready) && ready) dataRoot = only;
-    } else if (!vr::gamePath().empty() && vr::isGameFolder(vr::gamePath(), &ready) && ready) {
-        dataRoot = vr::gamePath();
-    } else if (vr::isGameFolder(ext + "/game", &ready) && ready) {
-        dataRoot = ext + "/game";
-    }
+    initGl(a);
+    initXr(a, std::string(app->activity->internalDataPath) + "/shaders.bin");
+    // PETARI_GAME_ROOT (petari_debug.env): look only there, e.g. a missing
+    // folder to see the setup screen without moving the player's files.
+    std::string dataRoot = findGameFiles(getenv("PETARI_GAME_ROOT"), ext + "/game");
     if (!dataRoot.empty()) {
         bootGame(dataRoot);
     } else {
@@ -1934,3 +2248,74 @@ extern "C" __attribute__((visibility("default"))) void port_android_main(android
     port_log("exiting");
     exit(0);
 }
+#else  // PC
+
+}  // namespace
+
+extern "C" int port_pc_main(const PortPcOptions* options) {
+    PortHostAllocScope scope;
+    App& a = gApp;
+    a.mirror = options->mirror != 0;
+
+    // ~/.local/share/PCGalaxyVR: the game's files (game/), saves (nand/), the
+    // log and the debug variables; ~/.config/PCGalaxyVR: the settings;
+    // ~/.cache/PCGalaxyVR: the shader cache.
+    std::string data = port_data_dir();
+    std::string saveRoot = data + "/nand";
+    port_make_dirs(saveRoot);
+    port_log_file((data + "/petari_log.txt").c_str());
+    port_log("PCGalaxyVR %s; log %s/petari_log.txt", PCGVR_VERSION, data.c_str());
+    gSaveRoot = saveRoot;
+    initDebugHooks(data + "/petari_debug.env", data + "/vrshots");
+    vr::loadSettings((port_config_dir() + "/petari_vr.ini").c_str());  // before the swapchains are sized
+    initGl(a);
+    initXr(a, port_cache_dir() + "/shaders.bin");
+
+    const char* only = options->gameDir ? options->gameDir : getenv("PETARI_GAME_ROOT");
+    std::string dataRoot = findGameFiles(only, data + "/game");
+    if (!dataRoot.empty()) {
+        bootGame(dataRoot);
+    } else {
+        if (only) port_log("no converted game files in %s", only);
+        vr::setupSetStorageAccess(true);  // a PC asks no permission to read the home folder
+        vr::setupStart(data, vr::gamePath().empty() ? data + "/game" : vr::gamePath());
+    }
+
+    bool quit = false, exitAsked = false;
+    while (!quit) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) {
+                // The window was closed: end the session properly first.
+                if (a.sessionRunning && !exitAsked) {
+                    xrRequestExitSession(a.session);
+                    exitAsked = true;
+                } else if (!a.sessionRunning) {
+                    quit = true;
+                }
+            }
+        }
+        handleEvents(a, quit);
+        if (exitAsked && a.state == XR_SESSION_STATE_IDLE) {
+            quit = true;
+        }
+        if (!gBooted) {
+            std::string chosen;
+            if (vr::setupTakeChoice(&chosen)) {
+                vr::saveGamePath(chosen);
+                bootGame(chosen);
+            }
+        }
+        if (a.sessionRunning) {
+            renderFrame(a);
+        } else {
+            port_host_sleep_ns(50000000);  // until the runtime has the session start
+        }
+    }
+    port_log("exiting");
+    // The game's threads cannot be wound down: leave without running
+    // destructors under them.
+    fflush(nullptr);
+    _exit(0);
+}
+#endif

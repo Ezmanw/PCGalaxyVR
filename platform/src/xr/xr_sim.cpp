@@ -2,7 +2,7 @@
 // simulated eyes and writes what the swapchains would receive, side by side,
 // to a PNG.  Used by tools/run_headless.sh (PETARI_XRSIM=1) to check the
 // headset presentation without wearing the headset.
-#include <GLES3/gl32.h>
+#include "port/gl.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

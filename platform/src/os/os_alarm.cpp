@@ -362,6 +362,7 @@ extern "C" void port_fatal(const char* fmt, ...) {
     }
     __android_log_vprint(ANDROID_LOG_FATAL, LOG_TAG, fmt, args);
 #else
+    fputs("FATAL: ", stderr);
     vfprintf(stderr, fmt, args);
     fputc('\n', stderr);
 #endif

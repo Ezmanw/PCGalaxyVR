@@ -5,7 +5,7 @@
 // HUD (the draws between the HUD markers) is rendered once into its own
 // target and shown on a panel in front of the player.  Frames without a
 // camera (logos, menus, movies) are shown on a virtual screen.
-#include <GLES3/gl32.h>
+#include "port/gl.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +14,7 @@
 #include <mutex>
 #include <string>
 
+#include "../gl/gl_context.h"
 #include "../gx/gl_renderer.h"
 #include "../gx/gpu.h"
 #include "port/port.h"
@@ -563,8 +564,7 @@ GLuint compile(GLenum type, const char* fmt, bool withCommon) {
         snprintf(src, sizeof(src), "%s", fmt);
     }
     GLuint s = glCreateShader(type);
-    const char* p = src;
-    glShaderSource(s, 1, &p, nullptr);
+    glctx::shaderSource(s, src);
     glCompileShader(s);
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -1069,8 +1069,7 @@ float& activeScale() { return sScaled == kScreenScale ? sScreenScale : sScale; }
 float scaleMin() { return sScaled == kScreenScale ? fminf(1.0f, fmaxf(0.5f, 0.75f * sMinScale)) : sMinScale; }
 float scaleMax() { return sScaled == kScreenScale ? 1.0f : sResolution; }
 
-const GLenum kTimeElapsed = 0x88BF;  // GL_TIME_ELAPSED_EXT
-const GLenum kGpuDisjoint = 0x8FBB;  // GL_GPU_DISJOINT_EXT
+const GLenum kTimeElapsed = 0x88BF;  // GL_TIME_ELAPSED(_EXT)
 struct EyeTimer {
     GLuint query = 0;
     bool pending = false;
@@ -1103,8 +1102,7 @@ double sLogAt = 0.0;
 float sBudgetMs = 0.0f;
 
 void initTimers() {
-    const char* ext = (const char*)glGetString(GL_EXTENSIONS);
-    sTimersOk = ext && strstr(ext, "GL_EXT_disjoint_timer_query");
+    sTimersOk = glctx::hasTimerQueries();
     if (sTimersOk) {
         for (EyeTimer& t : sTimers) glGenQueries(1, &t.query);
     }
@@ -1169,8 +1167,7 @@ void takeEyeTime(float ms, const EyeTimer& t) {
 }
 
 void pollTimers() {
-    GLint disjoint = 0;
-    glGetIntegerv(kGpuDisjoint, &disjoint);  // reading it also clears it
+    bool disjoint = glctx::timerDisjoint();  // reading it also clears it
     for (EyeTimer& t : sTimers) {
         if (!t.pending) continue;
         GLuint available = 0;

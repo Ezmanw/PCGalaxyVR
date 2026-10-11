@@ -145,6 +145,27 @@ The app ships `libopenxr_loader.so` from `openxr_loader_for_android` 1.1.63
 which `tools/fetch_openxr.sh` downloads from Maven Central, and is compiled
 against its headers. Licensed under the Apache License 2.0 (below).
 
+## Khronos OpenXR SDK (PC)
+
+The PC program (`pcgalaxyvr`) contains the OpenXR loader built from the
+OpenXR SDK 1.1.63 (The Khronos Group Inc.,
+https://github.com/KhronosGroup/OpenXR-SDK), which CMake fetches when the
+program is configured, and is compiled against its headers. Licensed under
+the Apache License 2.0 (below). The loader includes JsonCpp (Baptiste
+Lepilleur and The JsonCpp Authors, https://github.com/open-source-parsers/jsoncpp),
+in the public domain where that is recognized and otherwise under the MIT
+license.
+
+## SDL2 (PC)
+
+The PC program uses the system's SDL2 library (https://libsdl.org,
+Copyright (C) 1997-2024 Sam Lantinga), under the zlib license: it is
+provided 'as-is', without any express or implied warranty; it may be used
+for any purpose, including commercial applications, and altered and
+redistributed freely, provided that its origin is not misrepresented,
+altered versions are plainly marked as such, and the notice is not removed
+from source distributions.
+
 ## Android NDK native app glue
 
 The app's launcher (`libmain.so`) is built with `android_native_app_glue.c`

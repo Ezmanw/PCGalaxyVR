@@ -1,16 +1,17 @@
 // The setup screen: shown instead of the game when its files are not where
 // the app looks for them (the first start, or files moved).  A panel in
 // front of the player explains what the app needs and lists the folders on
-// the headset that hold the game's files, found by a search on a thread:
-// the app's own storage folder and, once the player lets the app read all
-// files, the headset's shared storage (Download, Documents, a folder of
-// their own).  Aim at a folder that is ready and press A or the trigger to
+// the headset (Quest) or the PC that hold the game's files, found by a search
+// on a thread: the app's own storage folder and, on the Quest once the player
+// lets the app read all files, the headset's shared storage (Download,
+// Documents, a folder of their own); on the PC the home folder, which needs
+// no permission.  Aim at a folder that is ready and press A or the trigger to
 // play from it; xr_app.cpp then boots the game and keeps the choice
 // (game_path in petari_vr.ini).  Files extracted from the disc but not
 // converted by tools/cook/cook.py show as such: the port cannot read them.
 // Files converted by an older converter, without the data it now also takes
 // from main.dol, show as to convert again.
-#include <GLES3/gl32.h>
+#include "port/gl.h"
 #include <dirent.h>
 #include <math.h>
 #include <stdio.h>
@@ -25,6 +26,7 @@
 #include <vector>
 
 #include "port/heap_routing.h"
+#include "port/paths.h"
 #include "port/port.h"
 #include "ui_canvas.h"
 #include "vr_renderer.h"
@@ -156,7 +158,11 @@ void search() {
         int64_t deadline = port_host_time_ns() + 4000000000ll;
         scanDir(appDir, 3, false, found, deadline);
         if (access) {
+#ifdef __ANDROID__
             scanDir("/storage/emulated/0", 4, true, found, deadline);
+#else
+            scanDir(port_home_dir(), 4, false, found, deadline);
+#endif
         }
         // Ready folders first.
         std::stable_sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.ready > b.ready; });
@@ -181,6 +187,7 @@ void search() {
 // shortened from the left.
 std::string shownPath(const std::string& path) {
     std::string p = path;
+#ifdef __ANDROID__
     const char* roots[] = {"/storage/emulated/0/", "/sdcard/"};
     for (const char* r : roots) {
         if (p.compare(0, strlen(r), r) == 0) {
@@ -188,6 +195,12 @@ std::string shownPath(const std::string& path) {
             break;
         }
     }
+#else
+    std::string home = port_home_dir() + "/";
+    if (p.compare(0, home.size(), home) == 0) {
+        p = "~/" + p.substr(home.size());
+    }
+#endif
     while (p.size() > 8 && ui::textWidth(kFontSmall, p.c_str()) > 860.0f) {
         size_t slash = p.find('/', p.compare(0, 3, "...") == 0 ? 4 : 1);
         if (slash == std::string::npos) break;
@@ -208,6 +221,7 @@ void drawPanel() {
     c.init(kTexW, kTexH);
     c.roundRect(0, 0, kTexW, kTexH, 36.0f, rgb(78, 86, 106, 0.97f));
     c.roundRect(3, 3, kTexW - 3, kTexH - 3, 33.0f, rgb(22, 25, 33));
+#ifdef __ANDROID__
     c.text(56, 86, kFontLarge, "GalaxyQuest", rgb(255, 255, 255));
     c.text(56, 136, kFontSmall, "The game's files are needed", rgb(140, 180, 255));
     float y = c.textWrapped(56, 196, kTexW - 112, 38, kFontSmall,
@@ -215,6 +229,15 @@ void drawPanel() {
                             "tools/cook/cook.py (see the project's README). Copy the converted folder, the one holding sys and "
                             "files, to the headset, then choose it below.",
                             rgb(196, 202, 216));
+#else
+    c.text(56, 86, kFontLarge, "PCGalaxyVR", rgb(255, 255, 255));
+    c.text(56, 136, kFontSmall, "The game's files are needed", rgb(140, 180, 255));
+    float y = c.textWrapped(56, 196, kTexW - 112, 38, kFontSmall,
+                            "This game plays Super Mario Galaxy from the files of your own disc, converted with "
+                            "tools/install_pc.py or tools/cook/cook.py (see the project's README). Choose the converted "
+                            "folder, the one holding sys and files, below.",
+                            rgb(196, 202, 216));
+#endif
     (void)y;
     c.roundRect(56, 336, kTexW - 56, 338, 1.0f, rgb(58, 63, 78));
 
@@ -225,12 +248,22 @@ void drawPanel() {
     }
     bool searching = sSearching.load();
     if (found.empty()) {
+#ifdef __ANDROID__
         const char* msg = searching ? "Searching the headset..." : "No game files found on the headset yet.";
+#else
+        const char* msg = searching ? "Searching this computer..." : "No game files found yet.";
+#endif
         c.text(56, kListY + 12, kFontSmall, msg, rgb(230, 234, 242));
         if (!searching) {
+#ifdef __ANDROID__
             std::string where = "The app looks in its own folder, " + shownPath(sAppDir) +
                                 (sAccess.load() ? ", and in the rest of the headset's storage." :
                                                   ". Allow access to all files to have it look in the rest of the headset's storage too.");
+#else
+            std::string where = "The game looks in " + shownPath(sAppDir) +
+                                " and four folders deep in your home folder. Convert your disc into " + shownPath(sAppDir) +
+                                "/game, or start the game with --game <folder>.";
+#endif
             c.textWrapped(56, kListY + 62, kTexW - 112, 36, kFontSmall, where.c_str(), rgb(140, 147, 163));
         }
     }
@@ -250,11 +283,13 @@ void drawPanel() {
     }
 
     drawButton(c, 56, kButtonsY - 36, 400, kButtonsY + 36, "Search again", kRescan, false);
+#ifdef __ANDROID__  // a PC has no storage permission to ask for
     if (sAccess.load()) {
         c.text(kTexW - 56, kButtonsY + 10, kFontSmall, "All files access: allowed", rgb(140, 147, 163), 2);
     } else {
         drawButton(c, 440, kButtonsY - 36, kTexW - 56, kButtonsY + 36, "Allow access to all files", kAccess, false);
     }
+#endif
     sShownSearch = sSearchCount.load();
     sShownSearching = searching;
     sShownAccess = sAccess.load();

@@ -12,6 +12,13 @@
 // Declare the C library's printf family (including bionic's FORTIFY inline
 // wrappers) before the renames below, so the macros only affect game code.
 #include <stdio.h>
+#if defined(__linux__) && !defined(__ANDROID__)
+// Likewise glibc's wide-string functions: its declarations carry noexcept in
+// C++, so one seen after the renames clashes with port_wcslen and the rest.
+#include <wchar.h>
+// Bionic's <cmath> brings in FLT_EPSILON and the rest; glibc's does not.
+#include <float.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

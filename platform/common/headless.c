@@ -1,16 +1,23 @@
-// Bring-up tool: boots libgame.so from an adb shell, without VR or a window.
+// Headless runner: boots the game without VR or a window, saving PNG
+// captures of what it draws.
 //
+// Quest (bring-up from an adb shell):
 //   adb push build-android/petari_headless build-android/libgame.so /data/local/tmp/petari/
 //   adb shell /data/local/tmp/petari/petari_headless <data root> <save root> [seconds]
+// There it reserves the game's low address window exactly like the
+// NativeActivity launcher and loads libgame.so at 0x98000000.
 //
-// Reserves the game's low address window exactly like the NativeActivity
-// launcher, loads libgame.so at 0x98000000, calls port_boot() and keeps the
-// process alive while the emulated game threads run.  Logs are mirrored to
-// stderr.
+// PC: `pcgalaxyvr --headless <data root> <save root> [seconds]`; the game is
+// the executable itself, its window reserved by platform/linux/main.cpp.
+//
+// Then it calls port_boot() and keeps the process alive while the emulated
+// game threads run.  Logs are mirrored to stderr.
 //
 // Controller 0 is a connected Wii remote + Nunchuk at rest.  PETARI_INPUT
 // scripts it (see port/input_script.h).
+#ifdef __ANDROID__
 #include <android/dlext.h>
+#endif
 #include <dlfcn.h>
 #include <errno.h>
 #include <math.h>
@@ -19,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -82,26 +90,26 @@ static long long nowMs(void) {
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+#ifdef __ANDROID__
 static const uintptr_t kWindowBase = 0x80000000u;
 static const size_t kWindowSize = 0x60010000u;
 static const uintptr_t kLibBase = 0x98000000u;
 static const size_t kLibSize = 0x08000000u;
 
-int main(int argc, char** argv) {
-    if (argc < 3) {
-        fprintf(stderr, "usage: %s <data root> <save root> [seconds]\n", argv[0]);
-        return 2;
-    }
-    int seconds = argc > 3 ? atoi(argv[3]) : 60;
+// The game library's entry points, looked up once it is loaded.
+static void* sLib;
+#define GAME_SYM(type, name) ((type)dlsym(sLib, #name))
 
+// Reserves the window and loads libgame.so (next to this executable) into it.
+static int loadGame(const char* argv0) {
     void* win = mmap((void*)kWindowBase, kWindowSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
     if (win != (void*)kWindowBase) {
         fprintf(stderr, "cannot reserve %p: got %p errno %d\n", (void*)kWindowBase, win, errno);
-        return 1;
+        return 0;
     }
 
     char path[512];
-    snprintf(path, sizeof(path), "%s", argv[0]);
+    snprintf(path, sizeof(path), "%s", argv0);
     char* slash = strrchr(path, '/');
     snprintf(slash ? slash + 1 : path, sizeof(path) - (slash ? (size_t)(slash + 1 - path) : 0), "libgame.so");
 
@@ -110,35 +118,72 @@ int main(int argc, char** argv) {
     ext.flags = ANDROID_DLEXT_RESERVED_ADDRESS;
     ext.reserved_addr = (void*)kLibBase;
     ext.reserved_size = kLibSize;
-    void* lib = android_dlopen_ext(path, RTLD_NOW | RTLD_LOCAL, &ext);
-    if (!lib) {
+    sLib = android_dlopen_ext(path, RTLD_NOW | RTLD_LOCAL, &ext);
+    if (!sLib) {
         fprintf(stderr, "dlopen %s: %s\n", path, dlerror());
+        return 0;
+    }
+    void (*setWindow)(uintptr_t, size_t) = GAME_SYM(void (*)(uintptr_t, size_t), port_mem_set_reserved_window);
+    if (!setWindow) {
+        fprintf(stderr, "missing entry points: %s\n", dlerror());
+        return 0;
+    }
+    setWindow(kWindowBase, kWindowSize);
+    fprintf(stderr, "libgame.so loaded at %p; booting\n", (void*)kLibBase);
+    return 1;
+}
+#define RUNNER_MAIN main
+#else
+// The game is this executable.
+extern int port_log_to_stderr;
+extern int port_trace_nerves;
+void port_boot(const char* dataRoot, const char* saveRoot);
+void port_input_set(int chan, const PortPadState* state);
+unsigned long long port_headless_render(const char* path, int scale);
+void port_headless_xrsim(const char* path, int frames, float yawDeg, float pitchDeg);
+void port_headless_dump(const char* prefix);
+void port_debug_dump_threads(void);
+#define GAME_SYM(type, name) ((type)&name)
+static int loadGame(const char* argv0) {
+    (void)argv0;
+    fprintf(stderr, "booting\n");
+    return 1;
+}
+#define RUNNER_MAIN port_headless_main
+#endif
+
+int RUNNER_MAIN(int argc, char** argv) {
+    if (argc < 3) {
+        fprintf(stderr, "usage: %s <data root> <save root> [seconds]\n", argv[0]);
+        return 2;
+    }
+    int seconds = argc > 3 ? atoi(argv[3]) : 60;
+    if (!loadGame(argv[0])) {
         return 1;
     }
+#ifndef __ANDROID__
+    char shotDir[512];
+    snprintf(shotDir, sizeof(shotDir), "%s/../shots", argv[2]);
+    mkdir(argv[2], 0755);
+    mkdir(shotDir, 0755);
+#endif
 
-    int* toStderr = (int*)dlsym(lib, "port_log_to_stderr");
+    int* toStderr = GAME_SYM(int*, port_log_to_stderr);
     if (toStderr) {
         *toStderr = 1;
     }
-    void (*setWindow)(uintptr_t, size_t) = (void (*)(uintptr_t, size_t))dlsym(lib, "port_mem_set_reserved_window");
-    void (*boot)(const char*, const char*) = (void (*)(const char*, const char*))dlsym(lib, "port_boot");
-    if (!setWindow || !boot) {
-        fprintf(stderr, "missing entry points: %s\n", dlerror());
-        return 1;
-    }
-    setWindow(kWindowBase, kWindowSize);
-    int* traceNerves = (int*)dlsym(lib, "port_trace_nerves");
+    void (*boot)(const char*, const char*) = GAME_SYM(void (*)(const char*, const char*), port_boot);
+    int* traceNerves = GAME_SYM(int*, port_trace_nerves);
     if (traceNerves && envSet("PETARI_NERVES")) {
         *traceNerves = atoi(envSet("PETARI_NERVES"));
     }
-    void (*inputSet)(int, const PortPadState*) = (void (*)(int, const PortPadState*))dlsym(lib, "port_input_set");
+    void (*inputSet)(int, const PortPadState*) = GAME_SYM(void (*)(int, const PortPadState*), port_input_set);
     static PortInputEvent events[1024];
     int eventCount = envSet("PETARI_INPUT") ? portParseInputScript(envSet("PETARI_INPUT"), events, 1024) : 0;
     PortPadState pad;
     padAt(events, eventCount, 0, &pad);
     if (inputSet) inputSet(0, &pad);
 
-    fprintf(stderr, "libgame.so loaded at %p; booting\n", (void*)kLibBase);
     long long start = nowMs();
     // The boot time, for debug hooks timed like PETARI_INPUT (PETARI_WARP).
     char startText[32];
@@ -148,7 +193,7 @@ int main(int argc, char** argv) {
 
     // Feed the scripted input every 5 ms and render a snapshot of the latest
     // game frame every PETARI_SHOT_MS (default 2 s).
-    unsigned long long (*render)(const char*, int) = (unsigned long long (*)(const char*, int))dlsym(lib, "port_headless_render");
+    unsigned long long (*render)(const char*, int) = GAME_SYM(unsigned long long (*)(const char*, int), port_headless_render);
     char shot[512];
     int shotIndex = 0;
     int intervalMs = envSet("PETARI_SHOT_MS") ? atoi(envSet("PETARI_SHOT_MS")) : 2000;
@@ -162,7 +207,7 @@ int main(int argc, char** argv) {
     // that rate between snapshots (profiling with PETARI_PERFLOG=1).
     double xrsimFps = envSet("PETARI_XRSIM_FPS") ? atof(envSet("PETARI_XRSIM_FPS")) : 0.0;
     long long nextXrsim = start;
-    void (*xrsimFn)(const char*, int, float, float) = (void (*)(const char*, int, float, float))dlsym(lib, "port_headless_xrsim");
+    void (*xrsimFn)(const char*, int, float, float) = GAME_SYM(void (*)(const char*, int, float, float), port_headless_xrsim);
     uint32_t lastButtons = 0;
     for (;;) {
         long long now = nowMs();
@@ -194,7 +239,7 @@ int main(int argc, char** argv) {
             render(shot, 2);
             if (envSet("PETARI_XRSIM")) {
                 // The headset presentation (vr_game.cpp) with simulated eyes.
-                void (*xrsim)(const char*, int, float, float) = (void (*)(const char*, int, float, float))dlsym(lib, "port_headless_xrsim");
+                void (*xrsim)(const char*, int, float, float) = xrsimFn;
                 float yaw = 0, pitch = -20;
                 if (envSet("PETARI_XRHEAD")) sscanf(envSet("PETARI_XRHEAD"), "%f,%f", &yaw, &pitch);
                 snprintf(shot, sizeof(shot), "%s/../shots/frame_%03d_xr.png", argv[2], shotIndex);
@@ -204,7 +249,7 @@ int main(int argc, char** argv) {
                 if (xrsim) xrsim(shot, steps > 0 ? steps : 1, yaw, pitch);
             }
             if (envSet("PETARI_DUMP")) {
-                void (*dump)(const char*) = (void (*)(const char*))dlsym(lib, "port_headless_dump");
+                void (*dump)(const char*) = GAME_SYM(void (*)(const char*), port_headless_dump);
                 snprintf(shot, sizeof(shot), "%s/../shots/frame_%03d", argv[2], shotIndex);
                 if (dump) dump(shot);
             }
@@ -212,7 +257,7 @@ int main(int argc, char** argv) {
         }
     }
     if (envSet("PETARI_THREADS")) {
-        void (*dumpThreads)(void) = (void (*)(void))dlsym(lib, "port_debug_dump_threads");
+        void (*dumpThreads)(void) = GAME_SYM(void (*)(void), port_debug_dump_threads);
         if (dumpThreads) dumpThreads();
     }
     fprintf(stderr, "headless: %d s elapsed, exiting\n", seconds);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(GalaxyQuest C CXX)
+project(PCGalaxyVR VERSION 0.1.0 LANGUAGES C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,8 +10,23 @@ set(DECOMP ${CMAKE_SOURCE_DIR}/decomp)
 
 if(ANDROID)
   set(PORT_PLATFORM android)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(PORT_PLATFORM linux)
 else()
-  set(PORT_PLATFORM desktop)
+  message(FATAL_ERROR "PCGalaxyVR builds for Linux (and, from the GalaxyQuest sources, Android); Windows is planned")
+endif()
+
+if(PORT_PLATFORM STREQUAL "linux")
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "PCGalaxyVR builds with clang (CC=clang CXX=clang++): the decompilation relies on its extensions")
+  endif()
+  # libc++, as with the Android NDK: libstdc++ still keeps C++98's std::mem_fun,
+  # binder2nd and the like, which the decompilation's MSL headers define again.
+  # Linked statically, so the program needs no libc++ installed.  lld places the
+  # program at its fixed address (see below).
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-stdlib=libc++>)
+  add_link_options(-stdlib=libc++ -static-libstdc++ -fuse-ld=lld)
+  option(PCGVR_SYSTEM_OPENXR "Use the system's OpenXR SDK (1.1 or newer) instead of fetching it" OFF)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -98,11 +113,22 @@ set(PORT_COMMON_FLAGS
 )
 set(PORT_CXX_FLAGS -fno-exceptions -fno-rtti)
 set(PORT_C_FLAGS)
+if(PORT_PLATFORM STREQUAL "linux")
+  # Position-independent code in a program linked at a fixed address above
+  # 2 GB: nothing may need a 32-bit absolute relocation.
+  list(APPEND PORT_COMMON_FLAGS -fPIE)
+endif()
 
 add_library(decomp OBJECT ${GAME_SRCS} ${JSYSTEM_SRCS} ${NW4R_SRCS} ${SDK_SRCS})
 target_include_directories(decomp PRIVATE ${DECOMP_INCLUDES})
 target_compile_definitions(decomp PRIVATE ${PORT_DEFS})
 target_compile_options(decomp PRIVATE ${PORT_COMMON_FLAGS} $<$<COMPILE_LANGUAGE:CXX>:${PORT_CXX_FLAGS}> $<$<COMPILE_LANGUAGE:C>:${PORT_C_FLAGS}>)
+
+# Flags for the port's own C and C++ code (not its one assembly file).
+set(PORT_CODE_FLAGS
+  $<$<COMPILE_LANGUAGE:C,CXX>:${PORT_COMMON_FLAGS}>
+  $<$<COMPILE_LANGUAGE:CXX>:${PORT_CXX_FLAGS}>
+  $<$<COMPILE_LANGUAGE:C>:${PORT_C_FLAGS}>)
 
 # ---------------------------------------------------------------------------
 # Port platform layer + final game library
@@ -111,19 +137,16 @@ file(GLOB_RECURSE PLATFORM_SRCS CONFIGURE_DEPENDS
   ${CMAKE_SOURCE_DIR}/platform/src/*.c
   ${CMAKE_SOURCE_DIR}/platform/src/*.cpp)
 
-add_library(game SHARED $<TARGET_OBJECTS:decomp> ${PLATFORM_SRCS})
-target_include_directories(game PRIVATE ${DECOMP_INCLUDES})
-target_compile_definitions(game PRIVATE ${PORT_DEFS} PORT_PLATFORM_CODE=1)
-target_compile_options(game PRIVATE ${PORT_COMMON_FLAGS} $<$<COMPILE_LANGUAGE:CXX>:${PORT_CXX_FLAGS}> $<$<COMPILE_LANGUAGE:C>:${PORT_C_FLAGS}>)
-target_link_options(game PRIVATE -Wl,--no-undefined -Wl,--error-limit=0)
 if(ANDROID)
+  add_library(game SHARED $<TARGET_OBJECTS:decomp> ${PLATFORM_SRCS})
+  target_include_directories(game PRIVATE ${DECOMP_INCLUDES})
+  target_compile_definitions(game PRIVATE ${PORT_DEFS} PORT_PLATFORM_CODE=1)
+  target_compile_options(game PRIVATE ${PORT_CODE_FLAGS})
   # -Bsymbolic: game code must bind to the port's operator new/delete, not the
   # system C++ runtime's.
-  target_link_options(game PRIVATE -Wl,-Bsymbolic -Wl,--gc-sections)
+  target_link_options(game PRIVATE -Wl,--no-undefined -Wl,--error-limit=0 -Wl,-Bsymbolic -Wl,--gc-sections)
   target_link_libraries(game PRIVATE log android)
-endif()
 
-if(ANDROID)
   # The Khronos OpenXR loader (tools/fetch_openxr.sh puts it there).
   set(OPENXR_DIR ${CMAKE_SOURCE_DIR}/third_party/openxr/prefab/modules)
   set(GLUE_DIR ${ANDROID_NDK}/sources/android/native_app_glue)
@@ -146,7 +169,61 @@ if(ANDROID)
   target_link_libraries(reserve PRIVATE log)
 
   # Bring-up tool: boots libgame.so from an adb shell without VR.
-  add_executable(petari_headless platform/android/headless.c)
+  add_executable(petari_headless platform/common/headless.c)
   target_link_libraries(petari_headless PRIVATE log dl m)
   target_include_directories(petari_headless PRIVATE platform/include)
+else()
+  # ---------------------------------------------------------------------------
+  # Linux: one program, pcgalaxyvr, the headset app and the headless runner.
+  # ---------------------------------------------------------------------------
+  find_package(SDL2 REQUIRED)
+  find_package(OpenGL REQUIRED COMPONENTS OpenGL GLX EGL)
+  find_package(X11 REQUIRED)
+  find_package(Threads REQUIRED)
+
+  if(PCGVR_SYSTEM_OPENXR)
+    find_package(OpenXR 1.1 CONFIG REQUIRED)
+  else()
+    # The Khronos OpenXR SDK (the headers have the Meta extensions the port
+    # asks for; the loader is linked in statically).
+    include(FetchContent)
+    set(DYNAMIC_LOADER OFF CACHE BOOL "" FORCE)
+    set(BUILD_API_LAYERS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_CONFORMANCE_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_WITH_SYSTEM_JSONCPP OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(openxr
+      GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
+      GIT_TAG release-1.1.63
+      GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(openxr)
+  endif()
+
+  add_executable(pcgalaxyvr $<TARGET_OBJECTS:decomp> ${PLATFORM_SRCS}
+    platform/common/headless.c
+    platform/linux/main.cpp
+    platform/linux/window.S)
+  target_include_directories(pcgalaxyvr PRIVATE ${DECOMP_INCLUDES})
+  target_compile_definitions(pcgalaxyvr PRIVATE ${PORT_DEFS} PORT_PLATFORM_CODE=1 PCGVR_VERSION="${PROJECT_VERSION}")
+  target_compile_options(pcgalaxyvr PRIVATE ${PORT_CODE_FLAGS})
+  # The game keeps pointers in 32-bit fields: the program is linked at
+  # 0x98000000 (not position-independent), and window.ld places the address
+  # window above it (see platform/linux/main.cpp).
+  # The C runtime's startup files for programs that are not position
+  # independent (crt1.o, crtbegin.o) address their data with 32-bit absolute
+  # relocations, which cannot reach 0x98000000: the position-independent ones
+  # are linked instead, crtendS.o and crtn.o last on the line.
+  foreach(crt Scrt1 crti crtbeginS crtendS crtn)
+    execute_process(COMMAND ${CMAKE_C_COMPILER} -print-file-name=${crt}.o OUTPUT_VARIABLE CRT_${crt} OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT IS_ABSOLUTE "${CRT_${crt}}")
+      message(FATAL_ERROR "cannot find the C runtime's ${crt}.o (clang -print-file-name=${crt}.o)")
+    endif()
+  endforeach()
+  set(CMAKE_CXX_STANDARD_LIBRARIES "${CRT_crtendS} ${CRT_crtn}")
+  target_link_options(pcgalaxyvr PRIVATE -no-pie -nostartfiles ${CRT_Scrt1} ${CRT_crti} ${CRT_crtbeginS}
+    -Wl,--image-base=0x98000000 -Wl,-T,${CMAKE_SOURCE_DIR}/platform/linux/window.ld -Wl,--error-limit=0)
+  set_property(TARGET pcgalaxyvr APPEND PROPERTY LINK_DEPENDS ${CMAKE_SOURCE_DIR}/platform/linux/window.ld)
+  target_link_libraries(pcgalaxyvr PRIVATE OpenXR::openxr_loader SDL2::SDL2 OpenGL::OpenGL OpenGL::GLX OpenGL::EGL X11::X11
+    Threads::Threads ${CMAKE_DL_LIBS} m)
+  install(TARGETS pcgalaxyvr RUNTIME DESTINATION bin)
 endif()

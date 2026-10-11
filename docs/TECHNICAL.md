@@ -3,6 +3,65 @@
 Technical notes for people working on the port. For playing, see the
 [README](../README.md) and [CONTROLS.md](CONTROLS.md).
 
+Most of this page comes from GalaxyQuest, the Quest version, and its
+measurements are the Quest's. The next section is what the PC (Linux)
+version changes; [PCVR_IMPLEMENTATION_BRIEF.md](PCVR_IMPLEMENTATION_BRIEF.md)
+has the reasons and the plan.
+
+## The PC version
+
+- **One program.** `pcgalaxyvr` is a non-PIE executable linked at
+  0x98000000 (`-Wl,--image-base`), compiled as position-independent code so
+  nothing needs a 32-bit absolute relocation above 2 GB. `window.S` and
+  `window.ld` add a zero-fill section from 0xA0000000 to 0xE0010000 (low
+  pool, uncached mirrors, locked cache) after `.bss`; the kernel therefore
+  puts the `brk` heap above it, and `main` (`platform/linux/main.cpp`)
+  remaps it as an uncommitted `PROT_NONE` reservation before anything else
+  runs, which `os_mem.cpp` then maps into as it does into the Quest
+  launcher's. MEM1 and MEM2 sit below the image, where nothing else is put
+  (shared libraries are mapped top-down from high addresses).
+- **Toolchain.** clang with LLVM's libc++ (as the NDK), linked statically
+  with lld. glibc needed `<wchar.h>` and `<float.h>` before the port's
+  renames in `port/compat.h`, and a dozen includes had the wrong case
+  (GalaxyQuest was built on Windows).
+- **OpenGL.** The renderer is written against OpenGL ES 3.2. On PC it runs on
+  desktop OpenGL 4.5 (a compatibility profile when the driver has one, for
+  GLES's defaults such as vertex array object 0; core otherwise): see
+  `port/gl.h` and `platform/src/gl/gl_context.*`. GLSL `#version 320 es`
+  becomes `#version 450 core`; `GL_FRAMEBUFFER_SRGB` and seamless cube maps
+  are enabled once (GLES always has both); GPU timers are core
+  (`GL_ARB_timer_query`); Qualcomm foveation is skipped; the shader compile
+  thread's shared context comes from GLX (the headset app) or EGL (the
+  headless runner, on Mesa's surfaceless platform when there is one).
+- **OpenXR.** `XR_KHR_opengl_enable` with the Xlib binding: SDL2 makes the
+  window and the GLX context on X11 (XWayland under Wayland). The loader is
+  the Khronos OpenXR SDK's, fetched by CMake and linked in statically. Meta's
+  extensions (SpaceWarp, passthrough, layer settings, performance counters
+  and levels, refresh rate) are enabled only when the runtime has them, as
+  before. Bindings are suggested for Touch, Touch Plus, Index, Vive, WMR and
+  the simple controller (`suggestBindings` in `xr_app.cpp`). Closing the
+  desktop window ends the session with `xrRequestExitSession`; while no
+  headset is found, the program waits for one.
+- **Desktop window.** The left eye's image is blitted into the SDL window
+  while it is still acquired (`mirrorEye`), cropped to the window's shape,
+  with `GL_FRAMEBUFFER_SRGB` off so the sRGB-encoded image is copied as it
+  is; swap interval 0, so the desktop never paces the frame loop.
+- **Audio.** `audio_out.cpp` keeps its ring buffer and resampler; on PC an
+  SDL2 audio device's callback drains it (48 kHz requested, 256-frame
+  device buffer), and an unplugged device is reopened.
+- **Folders** (`port/paths.h`): game files in `$XDG_DATA_HOME/PCGalaxyVR/game`,
+  saves in `.../nand`, the log and `petari_debug.env` beside them, settings
+  in `$XDG_CONFIG_HOME/PCGalaxyVR`, the shader cache in
+  `$XDG_CACHE_HOME/PCGalaxyVR`. The setup screen searches the data folder
+  and the home folder four levels deep.
+- **Headless.** `pcgalaxyvr --headless DATA SAVES [SECONDS]` is the Quest's
+  `petari_headless` (`platform/common/headless.c`), with captures in
+  `SAVES/../shots`; every `PETARI_*` variable below works the same.
+  `pcgalaxyvr --gl-selftest [N]` builds the VR layer's and renderer's
+  programs and N generated GX programs (pseudo-random register states
+  through `makeShaderUid`) without game files; CI runs it on Mesa's
+  software renderer (`tools/ci_smoke_test.sh`).
+
 ## Presentation in the headset
 
 - Gameplay is shown as a **diorama**. Mario stands on a tabletop-sized world
@@ -150,7 +209,7 @@ Known gaps:
 
 | Piece | Where | Notes |
 |---|---|---|
-| Game code | `decomp/` | Petari sources (CC0) with little-endian and 64-bit fixes and VR hooks, guarded by `TARGET_PC` / `__MWERKS__`; `git diff petari-base -- decomp` lists them |
+| Game code | `decomp/` | Petari sources (CC0) with little-endian and 64-bit fixes and VR hooks, guarded by `TARGET_PC` / `__MWERKS__`; `git diff 4b395ef -- decomp` lists them (4b395ef imported Petari unchanged) |
 | Memory | `platform/src/os/os_mem.cpp` | MEM1/MEM2 mapped at 0x80000000/0x90000000 in a reserved low 4 GB window; the game library loads at 0x98000000, so 32-bit pointers in data files stay valid |
 | Data | `tools/cook/` | Offline conversion of RARC, J3D, KCL, BCSV, layouts, fonts, messages, particles and JAudio formats to little-endian. The few pieces of data the game's executable holds (the error screens' archive, the StoryEvent and GalaxyID tables) come from the player's `sys/main.dol` too (`dol_data.py`), loaded at boot by `platform/src/dvd/dol_data.cpp` |
 | OS / SDK | `platform/src/{os,dvd,nand,input,sdk}` | Threads, alarms, interrupts, DVD, NAND saves, WPAD/KPAD, stubs |

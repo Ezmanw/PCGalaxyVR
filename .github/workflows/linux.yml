@@ -1,0 +1,45 @@
+name: Linux build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the build tools and libraries
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          clang lld libc++-dev libc++abi-dev cmake ninja-build
+          libsdl2-dev libgl-dev libegl-dev libx11-dev
+          libgl1-mesa-dri libegl-mesa0
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+      - name: Build
+        run: cmake --build build
+      - name: Smoke test
+        # The program starts, reserves its address window and, without game
+        # files, says so; the headless runner gets a desktop OpenGL context
+        # from Mesa's software renderer.
+        run: |
+          build/pcgalaxyvr --version
+          readelf -lW build/pcgalaxyvr | grep -E "LOAD|Entry"
+          tools/ci_smoke_test.sh build/pcgalaxyvr
+      - name: Package
+        run: |
+          mkdir -p out/PCGalaxyVR
+          cp build/pcgalaxyvr out/PCGalaxyVR/
+          strip --strip-debug out/PCGalaxyVR/pcgalaxyvr
+          cp -r tools/cook tools/install_pc.py README.md LICENSE THIRD_PARTY_NOTICES.md out/PCGalaxyVR/
+          find out/PCGalaxyVR -name __pycache__ -prune -exec rm -rf {} +
+          tar -C out -czf out/PCGalaxyVR-linux-x86_64.tar.gz PCGalaxyVR
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PCGalaxyVR-linux-x86_64
+          path: out/PCGalaxyVR-linux-x86_64.tar.gz
