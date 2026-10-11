@@ -232,7 +232,10 @@ From a player's log and SteamVR's own logs (SteamVR 2.18.3, PS VR2,
 RTX 3060, 90 Hz only): SteamVR turns quad layers into OpenVR overlays,
 which cannot be limited to one eye; the stereo screen's pair of layers
 looked wrong there, so SteamVR gets the panels and screen in the eye
-images (see TECHNICAL.md, "Quad layers and SteamVR").
+images (see TECHNICAL.md, "Quad layers and SteamVR"). SteamVR also
+counts image rectangle offsets from the top; with that corrected the
+player reported the stereo screen, settings and a 30-minute session
+working.
 
 Still to check, by a player: everything with game files, in a real
 headset (SteamVR, Monado, WiVRn), and the 120 Hz pacing.

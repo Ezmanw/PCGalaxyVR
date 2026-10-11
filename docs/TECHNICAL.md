@@ -53,6 +53,18 @@ has the reasons and the plan.
   (`vr::uiLayers()` false, the path for runtimes without sRGB swapchains);
   `PETARI_XR_QUADS=0/1` in `petari_debug.env` forces either way. Monado and
   WiVRn keep the quad layers.
+- **Image rectangles and SteamVR.** Pictures are drawn into the lower left
+  of their swapchain images (a render scale below 1), and `imageRect`
+  says so with GL's origin (offset 0). SteamVR counts the offset from the
+  image's top row, so it showed the rows above the picture (stale) and the
+  picture moved down. On SteamVR the offset is image height minus extent
+  (`lowerLeft` in `xr_app.cpp`); `PETARI_XR_RECT_FROM_TOP=0/1` forces
+  either way. Checked by a player (SteamVR 2.18.3, PS VR2).
+- **VR controllers are not gamepads.** SDL can also open the headset's
+  controllers (a PS VR2 Sense controller: its mapped left stick rested at
+  left and up, and stood in for the headset's stick when that was let go).
+  `pc_gamepad.cpp` leaves them out by name, and counts a gamepad stick only
+  once it has been seen at rest.
 - **Desktop window.** While the virtual screen is up (the giant screen,
   cutscenes) its picture is blitted into the SDL window, letterboxed
   (`mirrorScreen`); otherwise the left eye's image, cropped to the window's
