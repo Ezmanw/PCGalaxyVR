@@ -231,7 +231,10 @@ else()
   endforeach()
   set(CMAKE_CXX_STANDARD_LIBRARIES "${CRT_crtendS} ${CRT_crtn}")
   target_link_options(pcgalaxyvr PRIVATE -no-pie -nostartfiles ${CRT_Scrt1} ${CRT_crti} ${CRT_crtbeginS}
-    -Wl,--image-base=0x98000000 -Wl,-T,${CMAKE_SOURCE_DIR}/platform/linux/window.ld -Wl,--error-limit=0)
+    -Wl,--image-base=0x98000000 -Wl,-T,${CMAKE_SOURCE_DIR}/platform/linux/window.ld -Wl,--error-limit=0
+    # No GOT relaxation: lld turns "cmp sym@GOTPCREL(%rip)" and the like into
+    # a sign-extended 32-bit immediate, wrong for addresses at 0x98000000.
+    -Wl,--no-relax)
   set_property(TARGET pcgalaxyvr APPEND PROPERTY LINK_DEPENDS ${CMAKE_SOURCE_DIR}/platform/linux/window.ld)
   target_link_libraries(pcgalaxyvr PRIVATE OpenXR::openxr_loader SDL2::SDL2 OpenGL::OpenGL OpenGL::GLX OpenGL::EGL X11::X11
     Threads::Threads ${CMAKE_DL_LIBS} m)
