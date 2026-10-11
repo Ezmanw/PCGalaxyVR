@@ -4,6 +4,7 @@
 #include "port/pc_gamepad.h"
 
 #include <math.h>
+#include <string.h>
 
 #include "port/port.h"
 
@@ -30,11 +31,40 @@ float deadzone(float v) {
 float axis(SDL_GameControllerAxis a) { return sPad ? SDL_GameControllerGetAxis(sPad, a) / 32767.0f : 0.0f; }
 bool button(SDL_GameControllerButton b) { return sPad && SDL_GameControllerGetButton(sPad, b); }
 
+// A stick counts once it has been seen at rest: a device whose mapping has
+// it elsewhere when let go (a PS VR2 Sense controller read as a gamepad gave
+// left and up, so Mario walked whenever the headset's stick was let go)
+// stays out.
+bool sStickCentred[2];
+void stick(int which, float* x, float* y) {
+    *x = axis(which ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX);
+    *y = axis(which ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY);
+    sStickCentred[which] |= fabsf(*x) < 0.25f && fabsf(*y) < 0.25f;
+    if (!sStickCentred[which]) *x = *y = 0.0f;
+}
+
+// The headset's own controllers, which SDL may also find (by Bluetooth or
+// USB): they come through OpenXR, and as gamepads their mappings are wrong.
+bool vrController(const char* name) {
+    if (!name) return false;
+    for (const char* n : {"VR2 Sense", "Sense Controller", "Touch", "Quest", "Index Controller", "Knuckles", "Vive", "VIVE"}) {
+        if (strstr(name, n)) return true;
+    }
+    return false;
+}
+
 void open() {
     if (sPad) return;
     for (int i = 0; i < SDL_NumJoysticks(); i++) {
-        if (SDL_IsGameController(i) && (sPad = SDL_GameControllerOpen(i)) != nullptr) {
+        if (!SDL_IsGameController(i)) continue;
+        const char* name = SDL_GameControllerNameForIndex(i);
+        if (vrController(name)) {
+            port_log("input: %s left out (a VR controller; it comes through OpenXR)", name);
+            continue;
+        }
+        if ((sPad = SDL_GameControllerOpen(i)) != nullptr) {
             port_log("input: gamepad %s", SDL_GameControllerName(sPad));
+            sStickCentred[0] = sStickCentred[1] = false;
             return;
         }
     }
@@ -66,7 +96,10 @@ void merge(PortPadState* pad, bool keyboard) {
     auto down = [key](SDL_Scancode s) { return key && key[s]; };
 
     // The Nunchuk stick, where the headset's controllers give none.
-    float sx = deadzone(axis(SDL_CONTROLLER_AXIS_LEFTX)), sy = -deadzone(axis(SDL_CONTROLLER_AXIS_LEFTY));
+    float sx, sy;
+    stick(0, &sx, &sy);
+    sx = deadzone(sx);
+    sy = -deadzone(sy);
     if (down(SDL_SCANCODE_A)) sx -= 1.0f;
     if (down(SDL_SCANCODE_D)) sx += 1.0f;
     if (down(SDL_SCANCODE_W)) sy += 1.0f;
@@ -121,8 +154,9 @@ void tilt(PortPadState* pad) {
 }
 
 void rightStick(float* x, float* y) {
-    *x = deadzone(axis(SDL_CONTROLLER_AXIS_RIGHTX));
-    *y = deadzone(axis(SDL_CONTROLLER_AXIS_RIGHTY));
+    stick(1, x, y);
+    *x = deadzone(*x);
+    *y = deadzone(*y);
 }
 
 void rumble(int on) {

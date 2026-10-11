@@ -150,6 +150,7 @@ struct App {
     bool hasLayerSettings = false;  // XR_FB_composition_layer_settings (Super Resolution)
     bool hasRecommendedRes = false; // XR_META_recommended_layer_resolution (Meta's dynamic resolution)
     bool quadLayers = true;         // the runtime shows quad layers as OpenXR says (not SteamVR, see initUiLayers)
+    bool rectFromTop = false;       // the runtime counts imageRect offsets from the image's top (SteamVR, see lowerLeft)
     PFN_xrGetRecommendedLayerResolutionMETA xrGetRecommendedLayerResolutionMETA = nullptr;
     // Meta's performance counters (XR_META_performance_metrics): the app's
     // and the compositor's GPU time and the GPU's utilization, for the
@@ -528,7 +529,13 @@ void initInstance(App& a) {
         port_log("XR runtime: %s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion), XR_VERSION_MINOR(ip.runtimeVersion),
                  XR_VERSION_PATCH(ip.runtimeVersion));
         a.quadLayers = !strstr(ip.runtimeName, "SteamVR");
+        a.rectFromTop = strstr(ip.runtimeName, "SteamVR") != nullptr;
     }
+    // PETARI_XR_RECT_FROM_TOP=0/1 (petari_debug.env): whatever the runtime.
+    if (const char* t = getenv("PETARI_XR_RECT_FROM_TOP")) {
+        a.rectFromTop = atoi(t) != 0;
+    }
+    port_log("XR image rectangles: offsets from the image's %s", a.rectFromTop ? "top (SteamVR's way)" : "bottom (OpenGL's)");
     // PETARI_XR_QUADS=0/1 (petari_debug.env): the panels and the screen as
     // quad layers or in the eye images, whatever the runtime.
     if (const char* q = getenv("PETARI_XR_QUADS")) {
@@ -1023,6 +1030,16 @@ void initSession(App& a) {
 // The panels with text (the HUD panel, the settings panel) as quad layers
 // over the eye layer: one swapchain each at the panel's own size (after
 // vr::init, which sizes them).
+// The part of an image a layer shows: the lower left w x h of an image
+// imageHeight high, where everything is drawn (GL's origin, which OpenXR
+// takes for OpenGL images).  SteamVR counts the offset from the image's top
+// row instead: with an offset of 0 it showed the top of the image, the
+// rows above the picture (stale or never drawn), and the picture moved
+// down by what was missing, whenever the render scale was below 1.
+XrRect2Di lowerLeft(const App& a, int w, int h, int imageHeight) {
+    return {{0, a.rectFromTop ? imageHeight - h : 0}, {w, h}};
+}
+
 // SteamVR shows each quad layer as an OpenVR overlay (openxr_quadlayer_N in
 // its compositor log).  An overlay has no eye of its own, so a stereo pair's
 // two layers (eyeVisibility LEFT and RIGHT) both reached both eyes, on top of
@@ -1987,8 +2004,8 @@ void renderFrame(App& a) {
             projViews[e].pose = a.setPose[a.shownSet][e];
             projViews[e].fov = a.setFov[a.shownSet][e];
             projViews[e].subImage.swapchain = sc.handle;
-            projViews[e].subImage.imageRect.offset = {0, 0};
-            projViews[e].subImage.imageRect.extent = a.setRect[a.shownSet][e];  // the part rendered
+            const XrExtent2Di& part = a.setRect[a.shownSet][e];  // the part rendered
+            projViews[e].subImage.imageRect = lowerLeft(a, part.width, part.height, sc.height);
             if (warpFrame) {
                 XrCompositionLayerSpaceWarpInfoFB& w = warpInfo[e];
                 w.layerFlags = a.warpSkip ? XR_COMPOSITION_LAYER_SPACE_WARP_INFO_FRAME_SKIP_BIT_FB : 0;
@@ -2046,7 +2063,7 @@ void renderFrame(App& a) {
             q.space = a.appSpace;
             q.eyeVisibility = l.eye == vr::kLeftEye ? XR_EYE_VISIBILITY_LEFT : l.eye == vr::kRightEye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_BOTH;
             q.subImage.swapchain = sc.handle;
-            q.subImage.imageRect = {{0, 0}, {l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height}};
+            q.subImage.imageRect = lowerLeft(a, l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height, sc.height);
             q.pose.orientation = {l.orientation.x, l.orientation.y, l.orientation.z, l.orientation.w};
             q.pose.position = {l.position.x, l.position.y, l.position.z};
             q.size = {l.width, l.height};
