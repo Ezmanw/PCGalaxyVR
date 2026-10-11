@@ -18,11 +18,26 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends
           clang lld libc++-dev libc++abi-dev cmake ninja-build
           libsdl2-dev libgl-dev libopengl-dev libegl-dev libx11-dev
-          libgl1-mesa-dri libegl-mesa0
+          libgl1-mesa-dri libegl-mesa0 ccache
+      # Compiled objects are kept between runs: a fix that touches a few files
+      # rebuilds those, not all 1,800.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
-        run: cmake --build build
+        env:
+          CCACHE_DIR: ~/.cache/ccache
+          CCACHE_MAXSIZE: 2G
+          CCACHE_BASEDIR: ${{ github.workspace }}
+        run: |
+          cmake --build build
+          ccache --show-stats
       - name: Smoke test
         # The program starts, reserves its address window and, without game
         # files, says so; the headless runner gets a desktop OpenGL context
