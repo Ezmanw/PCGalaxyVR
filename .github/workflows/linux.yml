@@ -36,7 +36,7 @@ jobs:
           mkdir -p out/PCGalaxyVR
           cp build/pcgalaxyvr out/PCGalaxyVR/
           strip --strip-debug out/PCGalaxyVR/pcgalaxyvr
-          cp -r tools/cook tools/install_pc.py README.md LICENSE THIRD_PARTY_NOTICES.md out/PCGalaxyVR/
+          cp -r tools/cook tools/install_pc.py tools/rarc.py README.md LICENSE THIRD_PARTY_NOTICES.md out/PCGalaxyVR/
           cp platform/linux/pcgalaxyvr.desktop platform/linux/pcgalaxyvr.png out/PCGalaxyVR/
           find out/PCGalaxyVR -name __pycache__ -prune -exec rm -rf {} +
           tar -C out -czf out/PCGalaxyVR-linux-x86_64.tar.gz PCGalaxyVR

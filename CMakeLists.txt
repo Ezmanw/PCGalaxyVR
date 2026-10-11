@@ -237,6 +237,7 @@ else()
   install(FILES platform/linux/pcgalaxyvr.desktop DESTINATION share/applications)
   install(FILES platform/linux/pcgalaxyvr.png DESTINATION share/icons/hicolor/256x256/apps)
   install(PROGRAMS tools/install_pc.py DESTINATION share/pcgalaxyvr/tools)
+  install(FILES tools/rarc.py DESTINATION share/pcgalaxyvr/tools)  # cook.py imports it
   install(DIRECTORY tools/cook DESTINATION share/pcgalaxyvr/tools
     PATTERN __pycache__ EXCLUDE PATTERN native EXCLUDE)
 endif()
