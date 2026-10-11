@@ -119,6 +119,10 @@ if(PORT_PLATFORM STREQUAL "linux")
   # Position-independent code in a program linked at a fixed address above
   # 2 GB: nothing may need a 32-bit absolute relocation.
   list(APPEND PORT_COMMON_FLAGS -fPIE)
+  # operator new hands out the game's heap memory, 4-byte aligned as on the
+  # Wii.  x86-64's default (16) let the compiler store to new objects with
+  # instructions that fault when misaligned (ARM's do not).
+  list(APPEND PORT_CXX_FLAGS -fnew-alignment=8)
   # glibc's <math.h> and the PowerPC intrinsics share two names (see the header).
   list(APPEND PORT_C_FLAGS "SHELL:-include ${CMAKE_SOURCE_DIR}/platform/include/port/glibc_c.h")
 endif()

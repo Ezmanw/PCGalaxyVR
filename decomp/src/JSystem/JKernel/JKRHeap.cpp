@@ -379,6 +379,37 @@ void operator delete[](void* pData, int) noexcept {
 void operator delete[](void* pData, JKRHeap*, int) noexcept {
     gameFree(pData);
 }
+
+#if !defined(__ANDROID__)
+// Types aligned past the compiler's default for new (the PC build uses
+// -fnew-alignment=8, see CMakeLists.txt) come through the C++17 aligned
+// forms: into the same heaps, so their pointers fit in 32 bits too.
+#include <new>
+
+void* operator new(size_t size, std::align_val_t align) {
+    return gameAlloc(size, (int)align, nullptr);
+}
+
+void* operator new[](size_t size, std::align_val_t align) {
+    return gameAlloc(size, (int)align, nullptr);
+}
+
+void operator delete(void* pData, std::align_val_t) noexcept {
+    gameFree(pData);
+}
+
+void operator delete[](void* pData, std::align_val_t) noexcept {
+    gameFree(pData);
+}
+
+void operator delete(void* pData, size_t, std::align_val_t) noexcept {
+    gameFree(pData);
+}
+
+void operator delete[](void* pData, size_t, std::align_val_t) noexcept {
+    gameFree(pData);
+}
+#endif
 #else
 void* operator new(u32 size) {
     return JKRHeap::alloc(size, 4, nullptr);

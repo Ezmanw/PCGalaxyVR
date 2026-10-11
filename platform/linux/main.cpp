@@ -10,6 +10,8 @@
 // main turns it into an uncommitted reservation that os_mem.cpp maps into,
 // as it does into the Quest launcher's.
 #include <X11/Xlib.h>
+#include <execinfo.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +55,38 @@ void reserveWindow() {
     port_mem_set_reserved_window(kTailBase, kTailEnd - kTailBase);
 }
 
+// A crash prints where it happened, to the terminal and the log: the program
+// is at a fixed address, so the addresses map to functions in the same build
+// (nm, addr2line, or gdb on the release's binary).
+void onCrash(int sig, siginfo_t* info, void* context) {
+    const ucontext_t* uc = (const ucontext_t*)context;
+    void* pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
+    port_log("pcgalaxyvr %s crashed: signal %d at address %p, instruction %p; backtrace:", PCGVR_VERSION, sig, info->si_addr, pc);
+    void* frames[48];
+    int n = backtrace(frames, 48);
+    for (int i = 0; i < n; i++) {
+        port_log("  #%d %p", i, frames[i]);
+    }
+    port_log("(the log: ~/.local/share/PCGalaxyVR/petari_log.txt; please attach it to a bug report)");
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+void installCrashHandler() {
+    static char altStack[64 * 1024];
+    stack_t ss{};
+    ss.ss_sp = altStack;
+    ss.ss_size = sizeof(altStack);
+    sigaltstack(&ss, nullptr);
+    struct sigaction sa {};
+    sa.sa_sigaction = onCrash;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE}) {
+        sigaction(sig, &sa, nullptr);
+    }
+}
+
 void usage(FILE* out) {
     fprintf(out,
             "PCGalaxyVR %s: Super Mario Galaxy in PC VR (OpenXR)\n"
@@ -78,6 +112,7 @@ void usage(FILE* out) {
 
 int main(int argc, char** argv) {
     reserveWindow();
+    installCrashHandler();
 
     PortPcOptions options{};
     options.mirror = 1;
