@@ -11,6 +11,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 export XDG_DATA_HOME=$WORK/data XDG_CONFIG_HOME=$WORK/config XDG_CACHE_HOME=$WORK/cache PETARI_NOAUDIO=1
 
+"$BIN" --div-selftest
 "$BIN" --gl-selftest 256
 
 mkdir -p "$WORK/empty"
