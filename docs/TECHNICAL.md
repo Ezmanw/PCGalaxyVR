@@ -42,18 +42,24 @@ has the reasons and the plan.
   the simple controller (`suggestBindings` in `xr_app.cpp`). Closing the
   desktop window ends the session with `xrRequestExitSession`; while no
   headset is found, the program waits for one.
-- **Desktop window.** The left eye's image is blitted into the SDL window
-  while it is still acquired (`mirrorEye`), cropped to the window's shape,
+- **Desktop window.** While the virtual screen is up (the giant screen,
+  cutscenes) its picture is blitted into the SDL window, letterboxed
+  (`mirrorScreen`); otherwise the left eye's image, cropped to the window's
+  shape (`mirrorEye`). Both while the swapchain image is still acquired,
   with `GL_FRAMEBUFFER_SRGB` off so the sRGB-encoded image is copied as it
   is; swap interval 0, so the desktop never paces the frame loop.
 - **Flat mode and gamepads.** `pcgalaxyvr --flat` (`platform/linux/flat_app.cpp`)
   replays each frame into a 16:9 target the size of the window's 16:9 part
   (the giant screen's picture) and copies it into a vsynced SDL window; at a
-  multiple of 60 Hz the display drives the game's retrace. A gamepad, the
-  keyboard and the mouse are the Wii Remote and Nunchuk
-  (`platform/src/input/pc_gamepad.cpp`, `port/pc_gamepad.h`); in the headset
-  app a gamepad's buttons join the controllers', and its right stick moves
-  the pointer while the right controller is not tracked.
+  multiple of 60 Hz the display drives the game's retrace. Flat mode runs
+  `vr::init` for the VR layer's settings panel, which opens beside the pause
+  menu as in the headset, with only its Game tab (`vr::settingsSetFlat`),
+  drawn over the picture in an sRGB-capable window and worked through
+  `vr::settingsPointer2D`. A gamepad, the keyboard and the mouse are the Wii
+  Remote and Nunchuk (`platform/src/input/pc_gamepad.cpp`,
+  `port/pc_gamepad.h`); in the headset app a gamepad's buttons join the
+  controllers', and its right stick moves the pointer while the right
+  controller is not tracked.
 - **Audio.** `audio_out.cpp` keeps its ring buffer and resampler; on PC an
   SDL2 audio device's callback drains it (48 kHz requested, 256-frame
   device buffer), and an unplugged device is reopened.

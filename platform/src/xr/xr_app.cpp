@@ -110,8 +110,11 @@ struct App {
     VisualID visualId = 0;
     GLXDrawable drawable = 0;
     GLXContext glxContext = nullptr;
-    bool mirror = true;       // show the left eye in the window
+    bool mirror = true;       // show the headset's view in the window
     bool mirrorDrawn = false;  // something was drawn into it this frame
+    // The window shows the virtual screen's picture while the screen is up
+    // (the giant screen, cutscenes), the left eye otherwise.
+    bool mirrorScreen = false;
 #endif
 
     // OpenXR
@@ -283,6 +286,7 @@ void initGl(App& a) {
 }
 
 void mirrorEye(App&, GLuint, int, int) {}  // the headset has no desktop
+void mirrorScreen(App&, GLuint, int, int) {}
 void presentMirror(App&) {}
 #else
 // An SDL window with a GLX context: desktop OpenGL 4.5, a compatibility
@@ -344,7 +348,7 @@ void initGl(App& a) {
 // The left eye's image (the part rendered) into the desktop window, cropped
 // to the window's shape.  Called while the image is still acquired.
 void mirrorEye(App& a, GLuint fbo, int w, int h) {
-    if (!a.mirror || w <= 0 || h <= 0 || (SDL_GetWindowFlags(a.window) & SDL_WINDOW_MINIMIZED)) {
+    if (!a.mirror || a.mirrorScreen || w <= 0 || h <= 0 || (SDL_GetWindowFlags(a.window) & SDL_WINDOW_MINIMIZED)) {
         return;
     }
     int ww = 0, wh = 0;
@@ -365,6 +369,35 @@ void mirrorEye(App& a, GLuint fbo, int w, int h) {
     // A plain copy of the sRGB-encoded image: the window shows it as it is.
     glDisable(GL_FRAMEBUFFER_SRGB);
     glBlitFramebuffer(sx0, sy0, sx1, sy1, 0, 0, ww, wh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glEnable(GL_FRAMEBUFFER_SRGB);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    a.mirrorDrawn = true;
+}
+
+// The virtual screen's picture (w x h, 16:9) into the window, black bars
+// round it: what a spectator watches while the player has the giant screen.
+// Called while the image is still acquired.
+void mirrorScreen(App& a, GLuint fbo, int w, int h) {
+    if (!a.mirror || w <= 0 || h <= 0 || (SDL_GetWindowFlags(a.window) & SDL_WINDOW_MINIMIZED)) {
+        return;
+    }
+    int ww = 0, wh = 0;
+    SDL_GL_GetDrawableSize(a.window, &ww, &wh);
+    if (ww <= 0 || wh <= 0) return;
+    int vw = ww, vh = (int)((long)ww * h / w);
+    if (vh > wh) {
+        vh = wh;
+        vw = (int)((long)wh * w / h);
+    }
+    int x0 = (ww - vw) / 2, y0 = (wh - vh) / 2;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, ww, wh);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glDisable(GL_FRAMEBUFFER_SRGB);  // the sRGB-encoded picture as it is
+    glBlitFramebuffer(0, 0, w, h, x0, y0, x0 + vw, y0 + vh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glEnable(GL_FRAMEBUFFER_SRGB);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     a.mirrorDrawn = true;
@@ -1963,10 +1996,12 @@ void renderFrame(App& a) {
     XrCompositionLayerQuad quads[vr::kUiLayerCount];
     XrCompositionLayerSettingsFB quadSettings[vr::kUiLayerCount];
     uint32_t quadCount = 0;
+    bool screenUp = false;
     if (layerCount && vr::uiLayers()) {
         for (int k : vr::kUiLayerOrder) {
             vr::UiLayer l = vr::uiLayer(k);
             if (!l.visible) continue;
+            screenUp |= k == vr::kScreenLayer;
             Swapchain& sc = a.ui[k];
             if (l.changed || !a.uiHasImage[k]) {
                 uint32_t idx = acquireImage(sc);
@@ -1975,6 +2010,9 @@ void renderFrame(App& a) {
                     glBindFramebuffer(GL_FRAMEBUFFER, sc.fbos[idx]);
                     maybeSaveScreenShot(k, l, l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height);
                     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                }
+                if (k == vr::kScreenLayer) {
+                    mirrorScreen(a, sc.fbos[idx], l.imageWidth ? l.imageWidth : sc.width, l.imageHeight ? l.imageHeight : sc.height);
                 }
                 if (sc.mips > 1) {
                     glBindTexture(GL_TEXTURE_2D, sc.images[idx].image);
@@ -2004,6 +2042,12 @@ void renderFrame(App& a) {
             layers[baseCount + layerCount + quadCount - 1] = (const XrCompositionLayerBaseHeader*)&q;
         }
     }
+#ifndef __ANDROID__
+    // From the next frame on, the window shows the screen while it is up.
+    a.mirrorScreen = screenUp;
+#else
+    (void)screenUp;
+#endif
     // Meta Quest Super Resolution (the compositor's upscaling and
     // sharpening filter) on the eye layer.
     // Only while it holds the diorama: around the screen it is dark or

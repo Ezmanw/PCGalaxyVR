@@ -158,8 +158,9 @@ build/pcgalaxyvr
 ```
 
 The game starts on a giant screen in front of you, and a window on the
-desktop shows what the left eye sees (`--no-mirror` keeps it out of the
-way). Menu or X (left A on an Index) opens the pause menu, with the VR
+desktop shows it too, for anyone watching or streaming: the giant screen's
+picture while it is up, what your left eye sees in the diorama
+(`--no-mirror` keeps the window out of the way). Menu or X (left A on an Index) opens the pause menu, with the VR
 settings beside it.
 
 If the game finds no converted files, it shows a **setup screen** in the
@@ -175,9 +176,11 @@ build/pcgalaxyvr --flat
 plays the game in a window on the desktop, from the game's own camera as on
 a TV, with a gamepad or the keyboard and mouse (F11 or Alt+Enter: full
 screen). It is the quickest way to check that your converted files work, and
-a way to play without a headset. The VR settings panel is the headset's, so
-in flat mode settings come from `~/.config/PCGalaxyVR/petari_vr.ini` (the
-language, the cutscene skip, the camera's turns).
+a way to play without a headset. Pause the game (Esc, or Start) and the
+settings panel opens beside the pause menu, as in the headset, with the
+settings that apply without one: the language, the camera's turns and
+holding A to skip cutscenes. Click them with the mouse (or aim with the
+right stick and press A).
 
 | Wii | Gamepad (Xbox names) | Keyboard and mouse |
 |---|---|---|

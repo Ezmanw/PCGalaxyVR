@@ -45,6 +45,7 @@ struct Flat {
     SDL_GLContext gl = nullptr;
     gpu::EfbTarget target;
     int viewX = 0, viewY = 0, viewW = 0, viewH = 0;  // the 16:9 picture in the window (pixels, top-left origin)
+    int panelX = 0, panelY = 0, panelW = 0, panelH = 0;  // the settings panel, beside the pause menu (likewise)
     // The pointer, -1..1 across the picture: the mouse's position, or moved
     // by the right stick.
     float pointerX = 0.0f, pointerY = 0.0f;
@@ -69,6 +70,12 @@ void layout(Flat& f) {
     f.viewY = (h - vh) / 2;
     f.viewW = vw;
     f.viewH = vh;
+    // The settings panel (640x1300 pixels) on the picture's right, where the
+    // pause menu leaves room.
+    f.panelH = vh * 86 / 100;
+    f.panelW = f.panelH * 640 / 1300;
+    f.panelX = f.viewX + vw - f.panelW - vw * 3 / 100;
+    f.panelY = f.viewY + (vh - f.panelH) / 2;
     // At most 4K: beyond it the picture only costs more.
     int tw = vw > 3840 ? 3840 : vw, th = tw * 9 / 16;
     if (f.target.width != tw || f.target.height != th) {
@@ -97,6 +104,18 @@ void updateInput(Flat& f, float dt) {
     pad.pointerValid = f.pointerShown;
     pad.pointerX = f.pointerX;
     pad.pointerY = f.pointerY;
+
+    // The settings panel, up beside the pause menu, takes the pointer while
+    // it is over it, and the clicks made there (A: the left mouse button).
+    const uint32_t kWiiA = 0x0800, kWiiB = 0x0400;
+    float px = f.viewX + (f.pointerX + 1.0f) * 0.5f * f.viewW, py = f.viewY + (f.pointerY + 1.0f) * 0.5f * f.viewH;
+    float u = f.panelW > 0 ? (px - f.panelX) / f.panelW : -1.0f, v = f.panelH > 0 ? (py - f.panelY) / f.panelH : -1.0f;
+    if (vr::settingsPointer2D(u, v, f.pointerShown, (pad.buttons & (kWiiA | kWiiB)) != 0)) {
+        pad.pointerValid = 0;
+    }
+    if (vr::settingsOwnsClick()) {
+        pad.buttons &= ~(kWiiA | kWiiB);
+    }
     port_input_set(0, &pad);
     pcpad::rumble(port_input_rumble(0));
 }
@@ -110,6 +129,8 @@ void mouseMoved(Flat& f, int x, int y) {
     float px = x * (float)dw / ww, py = y * (float)dh / wh;
     float nx = (px - f.viewX) / f.viewW * 2.0f - 1.0f, ny = (py - f.viewY) / f.viewH * 2.0f - 1.0f;
     f.pointerShown = fabsf(nx) <= 1.0f && fabsf(ny) <= 1.0f;
+    // Over the picture the game's own cursor (or the panel's reticle) shows.
+    SDL_ShowCursor(f.pointerShown ? SDL_DISABLE : SDL_ENABLE);
     f.pointerX = fminf(1.0f, fmaxf(-1.0f, nx));
     f.pointerY = fminf(1.0f, fmaxf(-1.0f, ny));
 }
@@ -137,6 +158,13 @@ void draw(Flat& f) {
         glBlitFramebuffer(0, 0, f.target.width, f.target.height, f.viewX, y0, f.viewX + f.viewW, y0 + f.viewH, GL_COLOR_BUFFER_BIT, GL_LINEAR);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glEnable(GL_FRAMEBUFFER_SRGB);
+    }
+    // The settings panel over it, while the pause menu is up (its colours are
+    // linear: the window is sRGB-capable).
+    if (vr::settingsShown() && f.panelW > 0) {
+        glViewport(f.panelX, h - f.panelY - f.panelH, f.panelW, f.panelH);
+        vr::settingsDrawLayer();
+        glViewport(0, 0, w, h);
     }
 }
 
@@ -194,6 +222,7 @@ extern "C" int port_flat_main(const PortPcOptions* options) {
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
         SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+        SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 1);  // the settings panel draws linear colours
         f.window = SDL_CreateWindow("PCGalaxyVR", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
                                     SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
         if (f.window) {
@@ -214,7 +243,9 @@ extern "C" int port_flat_main(const PortPcOptions* options) {
     port_log("GL: %s / %s / %s", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
     glctx::applyDefaults();
     gpu::setShaderCachePath((port_cache_dir() + "/shaders.bin").c_str());
-    gpu::renderer().init();
+    // The VR layer's drawing (its settings panel) and the renderer.
+    vr::init();
+    vr::settingsSetFlat(true);
     layout(f);
     pcpad::init();
     f.refreshes = refreshesPerFrame(f.window);

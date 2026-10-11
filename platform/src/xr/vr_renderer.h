@@ -259,6 +259,13 @@ void settingsInit(const char* iniPath);
 // ray to the panel while the ray is on it (the game then gets no pointer),
 // 0 otherwise.
 float settingsPointer(xm::Vec3 origin, xm::Vec3 dir, bool clickDown);
+// Flat mode (a desktop window): the pointer as a point on the panel, u and
+// v across it (0..1, v down), `over` while it is on the panel; returns
+// whether it is (the game then gets no pointer).  Called each input update
+// instead of settingsPointer.
+bool settingsPointer2D(float u, float v, bool over, bool clickDown);
+// Flat mode: only the game's settings (the Game tab) are shown.
+void settingsSetFlat(bool flat);
 // True while the panel keeps the click buttons from the game (a click made
 // on it).
 bool settingsOwnsClick();

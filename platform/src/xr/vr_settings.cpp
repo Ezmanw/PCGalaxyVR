@@ -198,6 +198,11 @@ FITS(kGameItems);
 #undef TAB
 #undef FITS
 const int kTabCount = (int)(sizeof(kTabs) / sizeof(kTabs[0]));
+const int kGameTab = kTabCount - 1;
+// Flat mode (a desktop window, no headset): only the game's settings apply,
+// so the panel shows the Game tab alone.
+bool sFlat = false;
+int firstTab() { return sFlat ? kGameTab : 0; }
 
 float itemValue(const Item& item) {
     if (item.get) return item.get();
@@ -238,7 +243,8 @@ const xm::Vec3 kCenter{0.60f, -0.12f, -0.88f};
 // Layout, in texture pixels (top-down rows).  Under the title, the tabs;
 // under them the tab's settings, one row each (a slider takes two).
 const float kDefaultsX0 = 448.0f, kDefaultsX1 = 608.0f, kDefaultsY0 = 24.0f, kDefaultsY1 = 70.0f;
-const float kTabsY0 = 92.0f, kTabsY1 = 148.0f, kTabsX0 = 24.0f, kTabW = (kTexW - 48.0f) / kTabCount;
+const float kTabsY0 = 92.0f, kTabsY1 = 148.0f, kTabsX0 = 24.0f;
+float tabWidth() { return (kTexW - 48.0f) / (kTabCount - firstTab()); }
 const float kRowsTop = 172.0f, kRowH = 124.0f;
 const float kControlY = 42.0f;  // a row's control, below the row's top
 const float kButtonR = 30.0f;
@@ -349,8 +355,9 @@ void drawPanel() {
     c.text((kDefaultsX0 + kDefaultsX1) * 0.5f, 56, kFontSmall, "Defaults", rgb(230, 234, 242), 1);
 
     // Tabs.
-    for (int t = 0; t < kTabCount; t++) {
-        float x0 = kTabsX0 + kTabW * t + 3.0f, x1 = kTabsX0 + kTabW * (t + 1) - 3.0f;
+    for (int t = firstTab(); t < kTabCount; t++) {
+        int k = t - firstTab();
+        float x0 = kTabsX0 + tabWidth() * k + 3.0f, x1 = kTabsX0 + tabWidth() * (k + 1) - 3.0f;
         Hit h{kTabButton, t};
         Color back = t == sTab ? accent : sPressed == h || sHover == h ? rgb(84, 93, 116) : rgb(44, 49, 62);
         c.roundRect(x0, kTabsY0, x1, kTabsY1, 20.0f, back);
@@ -601,8 +608,8 @@ void describe(const Hit& h, char* out, size_t size) {
 Hit hitAt(float x, float y) {
     auto near = [](float x, float y, float cx, float cy, float r) { return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r; };
     if (x >= kDefaultsX0 - 8 && x <= kDefaultsX1 + 8 && y >= kDefaultsY0 - 8 && y <= kDefaultsY1 + 8) return {kDefaults, 0};
-    if (y >= kTabsY0 - 6 && y <= kTabsY1 + 6 && x >= kTabsX0 && x < kTabsX0 + kTabW * kTabCount) {
-        return {kTabButton, (int)((x - kTabsX0) / kTabW)};
+    if (y >= kTabsY0 - 6 && y <= kTabsY1 + 6 && x >= kTabsX0 && x < kTexW - kTabsX0) {
+        return {kTabButton, firstTab() + (int)((x - kTabsX0) / tabWidth())};
     }
     const Tab& tab = kTabs[sTab];
     for (int i = 0; i < tab.count; i++) {
@@ -638,8 +645,8 @@ void logControls() {
     };
     log("any", "Defaults", (kDefaultsX0 + kDefaultsX1) * 0.5f, (kDefaultsY0 + kDefaultsY1) * 0.5f);
     int tabWas = sTab;
-    for (int t = 0; t < kTabCount; t++) {
-        log("any", kTabs[t].name, kTabsX0 + kTabW * (t + 0.5f), (kTabsY0 + kTabsY1) * 0.5f);
+    for (int t = firstTab(); t < kTabCount; t++) {
+        log("any", kTabs[t].name, kTabsX0 + tabWidth() * (t - firstTab() + 0.5f), (kTabsY0 + kTabsY1) * 0.5f);
         sTab = t;
         for (int i = 0; i < kTabs[t].count; i++) {
             const Item& item = kTabs[t].items[i];
@@ -692,23 +699,23 @@ void settingsInit(const char* iniPath) {
     sReady = true;
 }
 
-float settingsPointer(xm::Vec3 origin, xm::Vec3 dir, bool clickDown) {
-    int64_t now = port_host_time_ns();
-    float dt = sLastUpdateNs ? fminf(0.1f, (now - sLastUpdateNs) / 1e9f) : 0.0f;
-    sLastUpdateNs = now;
-    // Shown while the pause menu takes input (reported each game frame).
-    bool wanted = sReady && sMenuSelecting.load() && now - sMenuReportedAt.load() < 250000000;
-    sAlpha = wanted ? fminf(1.0f, sAlpha + dt / 0.15f) : fmaxf(0.0f, sAlpha - dt / 0.12f);
-    if (sShown && !wanted && sUnsaved) {
-        save();  // the menu closed
-    } else if (sUnsaved && now - sChangedNs > 3000000000ll) {
-        save();  // or three seconds after the last change, in case it never does
-    }
-    if (wanted != sShown) {
-        port_log("vr settings: panel %s", wanted ? "shown" : "hidden");
-    }
-    sShown = wanted;
+}  // namespace vr
 
+namespace {
+
+// Shows or hides the panel with the pause menu and saves the settings
+// changed; whether it is wanted now.
+bool updateShown();
+// The panel's pointer handling, the pointer at panel pixel (px, py) when
+// `onPanelHit` (`hitT` away along the ray in the headset).
+float pointerAt(bool onPanelHit, float px, float py, float hitT, bool clickDown, bool wanted);
+
+}  // namespace
+
+namespace vr {
+
+float settingsPointer(xm::Vec3 origin, xm::Vec3 dir, bool clickDown) {
+    bool wanted = updateShown();
     float hitT = 0.0f;
     float px = 0.0f, py = 0.0f;
     if (wanted) {
@@ -724,6 +731,46 @@ float settingsPointer(xm::Vec3 origin, xm::Vec3 dir, bool clickDown) {
             }
         }
     }
+    return pointerAt(hitT > 0.0f, px, py, hitT, clickDown, wanted);
+}
+
+bool settingsPointer2D(float u, float v, bool over, bool clickDown) {
+    bool wanted = updateShown();
+    bool on = wanted && over && u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f;
+    return pointerAt(on, u * kTexW, v * kTexH, 1.0f, clickDown, wanted) > 0.0f;
+}
+
+void settingsSetFlat(bool flat) {
+    sFlat = flat;
+    if (flat) sTab = kGameTab;
+}
+
+}  // namespace vr
+
+namespace {
+
+bool updateShown() {
+    int64_t now = port_host_time_ns();
+    float dt = sLastUpdateNs ? fminf(0.1f, (now - sLastUpdateNs) / 1e9f) : 0.0f;
+    sLastUpdateNs = now;
+    // Shown while the pause menu takes input (reported each game frame).
+    bool wanted = sReady && sMenuSelecting.load() && now - sMenuReportedAt.load() < 250000000;
+    sAlpha = wanted ? fminf(1.0f, sAlpha + dt / 0.15f) : fmaxf(0.0f, sAlpha - dt / 0.12f);
+    if (sShown && !wanted && sUnsaved) {
+        save();  // the menu closed
+    } else if (sUnsaved && now - sChangedNs > 3000000000ll) {
+        save();  // or three seconds after the last change, in case it never does
+    }
+    if (wanted != sShown) {
+        port_log("vr settings: panel %s", wanted ? "shown" : "hidden");
+    }
+    sShown = wanted;
+    return wanted;
+}
+
+float pointerAt(bool onPanelHit, float px, float py, float hitT, bool clickDown, bool wanted) {
+    int64_t now = port_host_time_ns();
+    if (!onPanelHit) hitT = 0.0f;
     Hit over = hitT > 0.0f ? hitAt(px, py) : Hit{};
     sPointerPx = px;
     sPointerPy = py;
@@ -777,6 +824,10 @@ float settingsPointer(xm::Vec3 origin, xm::Vec3 dir, bool clickDown) {
     sClickDown = clickDown;
     return hitT;
 }
+
+}  // namespace
+
+namespace vr {
 
 bool settingsOwnsClick() { return sOwnsClick; }
 

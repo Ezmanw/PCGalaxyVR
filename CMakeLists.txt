@@ -3,6 +3,8 @@ project(PCGalaxyVR VERSION 0.1.0 LANGUAGES C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# No C++20 modules here: no dependency scanning of every source.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
