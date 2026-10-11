@@ -23,7 +23,7 @@ jobs:
       # rebuilds those, not all 1,800.
       - uses: actions/cache@v4
         with:
-          path: ~/.cache/ccache
+          path: .ccache
           key: ccache-${{ github.sha }}
           restore-keys: ccache-
       - name: Configure
@@ -32,7 +32,7 @@ jobs:
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         env:
-          CCACHE_DIR: ~/.cache/ccache
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 2G
           CCACHE_BASEDIR: ${{ github.workspace }}
         run: |
